@@ -152,6 +152,21 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 1b. WebSocket upgrade detection. A WS handshake must be relayed as a raw
+	// byte pipe (see handleWebSocket); it cannot be model-routed (the model
+	// lives only in the body, and there is no body to buffer here), so only the
+	// explicit-vendor /x/ mount supports it. We branch BEFORE buffering the body
+	// so an upgrade is never read as an HTTP body.
+	if isWebSocketUpgrade(r) {
+		if rest, isX := strings.CutPrefix(r.URL.Path, "/x/"); isX {
+			h.handleWebSocket(w, r, token, rest)
+			return
+		}
+		writeError(w, http.StatusUpgradeRequired, "upgrade_required",
+			"websocket upgrades must use /x/<vendor>/... (cannot be model-routed)")
+		return
+	}
+
 	// 2. Buffer the request body, bounded.
 	body, tooLarge, err := readBounded(r.Body, h.maxBodyBytes)
 	if tooLarge {

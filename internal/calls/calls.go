@@ -20,6 +20,7 @@ const (
 	ModalityTTS       Modality = "tts"
 	ModalitySTT       Modality = "stt"
 	ModalityMCP       Modality = "mcp"
+	ModalityRealtime  Modality = "realtime"
 	ModalityUnknown   Modality = "unknown"
 )
 
