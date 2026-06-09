@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -111,6 +112,7 @@ func TestAuthRequiredOnAllEndpoints(t *testing.T) {
 
 	endpoints := []struct{ method, path string }{
 		{"GET", "/api/overview"},
+		{"GET", "/api/usage/series"},
 		{"GET", "/api/ledger"},
 		{"GET", "/api/ledger/export?format=csv"},
 		{"GET", "/api/tokens"},
@@ -523,7 +525,122 @@ func TestOverviewNullRunwayNoBudget(t *testing.T) {
 	}
 }
 
-// --- (e) vendors ---
+// --- (e) usage series ---
+
+func seedSeriesLedger(t *testing.T, s *store.Store, now time.Time) {
+	t.Helper()
+	// now is 2026-06-09 12:00 UTC. Put traffic on day -1 and day -3 (relative
+	// to now), leaving day -2 as a gap inside the default 7-day window.
+	entries := []ledger.Entry{
+		// day -1: 2 rows, 1 error (500); cost 0.10 + 0.20.
+		{TS: now.Add(-24 * time.Hour), Vendor: "openai", Status: 200, Cost: 0.10, LatencyMS: 10},
+		{TS: now.Add(-24 * time.Hour).Add(time.Hour), Vendor: "openai", Status: 500, Cost: 0.20, LatencyMS: 20},
+		// day -3: 1 row, transport error (status 0); cost 1.0.
+		{TS: now.Add(-72 * time.Hour), Vendor: "openai", Status: 0, Cost: 1.0, LatencyMS: 30},
+	}
+	for i, e := range entries {
+		if _, err := s.AppendLedger(e); err != nil {
+			t.Fatalf("AppendLedger[%d]: %v", i, err)
+		}
+	}
+}
+
+func TestUsageSeriesDefaults(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+	seedSeriesLedger(t, s, now)
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret", Now: func() time.Time { return now }})
+
+	rec := do(h, "GET", "/api/usage/series", "secret", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("series: code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var v usageSeriesView
+	decodeBody(t, rec, &v)
+
+	// Default 7-day window -> range > 2 days -> day buckets.
+	if v.Bucket != "day" {
+		t.Errorf("bucket label = %q, want day", v.Bucket)
+	}
+	if len(v.Points) == 0 {
+		t.Fatal("no points returned")
+	}
+
+	// Points must be ascending and contiguous (gap-filled): every step exactly
+	// 24h, and every parseable RFC3339.
+	var prev time.Time
+	var totalCost float64
+	var totalReq, totalErr int
+	for i, p := range v.Points {
+		ts, err := time.Parse(time.RFC3339, p.TS)
+		if err != nil {
+			t.Fatalf("point[%d] ts not RFC3339: %q", i, p.TS)
+		}
+		if i > 0 {
+			if !ts.After(prev) {
+				t.Errorf("points not ascending at %d: %v <= %v", i, ts, prev)
+			}
+			if d := ts.Sub(prev); d != 24*time.Hour {
+				t.Errorf("gap between points %d-%d = %v, want 24h (not gap-filled)", i-1, i, d)
+			}
+		}
+		prev = ts
+		totalCost += p.Cost
+		totalReq += p.Requests
+		totalErr += p.Errors
+	}
+	// Totals across the window equal the seeded traffic.
+	if !approxF(totalCost, 1.30) {
+		t.Errorf("total cost = %v, want 1.30", totalCost)
+	}
+	if totalReq != 3 {
+		t.Errorf("total requests = %d, want 3", totalReq)
+	}
+	if totalErr != 2 { // status 500 and status 0
+		t.Errorf("total errors = %d, want 2", totalErr)
+	}
+}
+
+func TestUsageSeriesExplicitHour(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret", Now: func() time.Time { return now }})
+
+	since := now.Add(-3 * time.Hour).Unix()
+	until := now.Unix()
+	target := "/api/usage/series?bucket=hour&since=" +
+		strconv.FormatInt(since, 10) + "&until=" + strconv.FormatInt(until, 10)
+	rec := do(h, "GET", target, "secret", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("series hour: code = %d", rec.Code)
+	}
+	var v usageSeriesView
+	decodeBody(t, rec, &v)
+	if v.Bucket != "hour" {
+		t.Errorf("bucket = %q, want hour", v.Bucket)
+	}
+	if len(v.Points) != 3 {
+		t.Errorf("points = %d, want 3 hourly buckets", len(v.Points))
+	}
+}
+
+func TestUsageSeriesAuthAndBadBucket(t *testing.T) {
+	h := testHandler(t, Deps{AdminKey: "secret"})
+
+	// 401 without the key.
+	rec := do(h, "GET", "/api/usage/series", "", nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("no key: code = %d, want 401", rec.Code)
+	}
+
+	// 400 on an invalid bucket value.
+	rec = do(h, "GET", "/api/usage/series?bucket=week", "secret", nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("bad bucket: code = %d, want 400", rec.Code)
+	}
+}
+
+// --- (f) vendors ---
 
 func TestVendorsNeverLeakAPIKey(t *testing.T) {
 	s := newTestStore(t)

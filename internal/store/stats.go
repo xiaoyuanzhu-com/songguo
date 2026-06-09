@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -162,6 +163,103 @@ func (s *Store) VendorStats(since, until *time.Time) (map[string]VendorStat, err
 		return nil, fmt.Errorf("store: vendor last status: %w", err)
 	}
 
+	return out, nil
+}
+
+// maxSeriesBuckets caps the number of buckets UsageSeries will produce, so an
+// absurd range/bucket combination cannot allocate unbounded memory.
+const maxSeriesBuckets = 10000
+
+// ErrTooManyBuckets is returned by UsageSeries when the requested range/bucket
+// combination would exceed maxSeriesBuckets. Callers can map it to a 400.
+var ErrTooManyBuckets = errors.New("store: too many buckets")
+
+// SeriesPoint is one bucket of the usage timeseries: the bucket start (UTC) and
+// the cost/request/error totals for rows whose ts falls in that bucket.
+type SeriesPoint struct {
+	Bucket   time.Time
+	Cost     float64
+	Requests int
+	Errors   int
+}
+
+// UsageSeries returns cost/request/error totals grouped into fixed time buckets
+// across [since, until). bucket is time.Hour or 24*time.Hour. Bucket starts are
+// aligned to the unix epoch. EVERY bucket in the range is present (gaps filled
+// with zeroes) so the chart has no holes. Bucket timestamps are in UTC.
+//
+// An "error" is any row whose status is 0 (transport failure) or >= 400.
+func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]SeriesPoint, error) {
+	if bucket <= 0 {
+		return nil, fmt.Errorf("store: usage series: bucket must be positive")
+	}
+	bucketMs := bucket.Milliseconds()
+	if bucketMs <= 0 {
+		return nil, fmt.Errorf("store: usage series: bucket too small")
+	}
+
+	// Align the range to bucket boundaries: the first bucket contains `since`,
+	// and we emit buckets up to (but not including) `until`.
+	sinceMs := since.UnixMilli()
+	untilMs := until.UnixMilli()
+	startMs := (sinceMs / bucketMs) * bucketMs
+	if untilMs <= startMs {
+		return []SeriesPoint{}, nil
+	}
+
+	// Number of buckets from the aligned start up to the bucket containing the
+	// last instant before `until`.
+	count := (untilMs-startMs-1)/bucketMs + 1
+	if count > maxSeriesBuckets {
+		return nil, fmt.Errorf("%w: %d exceeds limit of %d", ErrTooManyBuckets, count, maxSeriesBuckets)
+	}
+
+	rows, err := s.db.Query(
+		`SELECT (ts / ?) * ? AS bucket_start,
+		        COALESCE(SUM(cost), 0),
+		        COUNT(*),
+		        SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END)
+		   FROM ledger
+		  WHERE ts >= ? AND ts < ?
+		  GROUP BY bucket_start`,
+		bucketMs, bucketMs, sinceMs, untilMs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: usage series: %w", err)
+	}
+	defer rows.Close()
+
+	type agg struct {
+		cost     float64
+		requests int
+		errors   int
+	}
+	byBucket := make(map[int64]agg)
+	for rows.Next() {
+		var (
+			bucketStart int64
+			a           agg
+		)
+		if err := rows.Scan(&bucketStart, &a.cost, &a.requests, &a.errors); err != nil {
+			return nil, fmt.Errorf("store: scan usage series: %w", err)
+		}
+		byBucket[bucketStart] = a
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: usage series: %w", err)
+	}
+
+	out := make([]SeriesPoint, 0, count)
+	for i := int64(0); i < count; i++ {
+		bs := startMs + i*bucketMs
+		p := SeriesPoint{Bucket: time.UnixMilli(bs).UTC()}
+		if a, ok := byBucket[bs]; ok {
+			p.Cost = a.cost
+			p.Requests = a.requests
+			p.Errors = a.errors
+		}
+		out = append(out, p)
+	}
 	return out, nil
 }
 

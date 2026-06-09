@@ -82,6 +82,7 @@ func NewHandler(d Deps) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/overview", a.handleOverview)
+	mux.HandleFunc("GET /api/usage/series", a.handleUsageSeries)
 	mux.HandleFunc("GET /api/ledger", a.handleLedger)
 	mux.HandleFunc("GET /api/ledger/export", a.handleLedgerExport)
 	mux.HandleFunc("GET /api/tokens", a.handleListTokens)

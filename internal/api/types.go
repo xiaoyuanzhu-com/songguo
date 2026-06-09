@@ -125,6 +125,20 @@ type overviewView struct {
 	RunwayDays      *float64           `json:"runway_days"`
 }
 
+// seriesPoint is one bucket in the GET /api/usage/series response.
+type seriesPoint struct {
+	TS       string  `json:"ts"`
+	Cost     float64 `json:"cost"`
+	Requests int     `json:"requests"`
+	Errors   int     `json:"errors"`
+}
+
+// usageSeriesView is the GET /api/usage/series response.
+type usageSeriesView struct {
+	Bucket string        `json:"bucket"`
+	Points []seriesPoint `json:"points"`
+}
+
 // ledgerView is the GET /api/ledger response.
 type ledgerView struct {
 	Entries []entryView `json:"entries"`

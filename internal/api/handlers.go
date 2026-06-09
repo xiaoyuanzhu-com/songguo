@@ -196,6 +196,66 @@ func (a *api) handleOverview(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleUsageSeries returns cost/request/error totals bucketed over time for
+// the spend-over-time chart. Window defaults to the last 7 days; bucket defaults
+// to "day" when the range exceeds 2 days, else "hour". Only "hour"/"day" are
+// accepted.
+func (a *api) handleUsageSeries(w http.ResponseWriter, r *http.Request) {
+	now := a.now().UTC()
+	since := now.AddDate(0, 0, -7)
+	until := now
+	if v, ok := parseUnixTime(r, "since"); ok {
+		since = *v
+	}
+	if v, ok := parseUnixTime(r, "until"); ok {
+		until = *v
+	}
+
+	raw := r.URL.Query().Get("bucket")
+	var (
+		bucket time.Duration
+		label  string
+	)
+	switch raw {
+	case "":
+		// Default by range: day if range > 2 days, else hour.
+		if until.Sub(since) > 48*time.Hour {
+			bucket, label = 24*time.Hour, "day"
+		} else {
+			bucket, label = time.Hour, "hour"
+		}
+	case "hour":
+		bucket, label = time.Hour, "hour"
+	case "day":
+		bucket, label = 24*time.Hour, "day"
+	default:
+		writeError(w, http.StatusBadRequest, "bad_request", "bucket must be hour or day")
+		return
+	}
+
+	points, err := a.store.UsageSeries(since, until, bucket)
+	if err != nil {
+		if errors.Is(err, store.ErrTooManyBuckets) {
+			writeError(w, http.StatusBadRequest, "bad_request", "requested range is too large for the chosen bucket")
+			return
+		}
+		a.serverError(w, "usage series", err)
+		return
+	}
+
+	views := make([]seriesPoint, 0, len(points))
+	for _, p := range points {
+		views = append(views, seriesPoint{
+			TS:       p.Bucket.UTC().Format(time.RFC3339),
+			Cost:     p.Cost,
+			Requests: p.Requests,
+			Errors:   p.Errors,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, usageSeriesView{Bucket: label, Points: views})
+}
+
 // handleLedger returns a filtered, paginated page of ledger entries plus the
 // total count for the same filter.
 func (a *api) handleLedger(w http.ResponseWriter, r *http.Request) {
