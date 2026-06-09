@@ -9,9 +9,10 @@
 # Real config (only the example is committed)
 /config.yaml
 
-# Web build artifacts (dist is committed so the binary builds without Node)
-web/node_modules/
-web/*.tsbuildinfo
+# Frontend build artifacts (backend/web/dist is committed so the binary builds without Node)
+frontend/node_modules/
+frontend/*.tsbuildinfo
+frontend/dist/
 
 # Misc
 .DS_Store

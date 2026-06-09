@@ -31,8 +31,8 @@ Songguo is **single-tenant, multi-token**: one owner, many scoped keys. No accou
 ## Quickstart
 
 ```bash
-# 1. Build (the dashboard is pre-built and committed, so Go alone is enough)
-go build -o songguo ./cmd/songguo
+# 1. Build (compiles the dashboard, then the single ./songguo binary)
+make build
 
 # 2. Configure your vendors
 cp config.example.yaml config.yaml   # then edit: base_url, credentials, served_models, prices
@@ -43,7 +43,11 @@ export SONGGUO_ADMIN_KEY="$(openssl rand -hex 16)"   # gates the dashboard + adm
 # -> songguo listening on :8080
 ```
 
-Open the dashboard at **http://localhost:8080/** and enter the admin key. Mint a token on the **Tokens** page, then point any OpenAI-compatible SDK at the gateway, using that token as the API key:
+The dashboard is also pre-built and committed (in `backend/web/dist`), so if you already have it built you can compile the binary with Go alone: `cd backend && go build -o ../songguo ./cmd/songguo`.
+
+For local development, run `make dev` and open **http://localhost:5173** — this starts the Go backend on `:8080` and the Vite dev server on `:5173` (which proxies API traffic to the backend); Ctrl+C stops both.
+
+Open the dashboard at **http://localhost:8080/** (production) or **http://localhost:5173/** (dev) and enter the admin key. Mint a token on the **Tokens** page, then point any OpenAI-compatible SDK at the gateway, using that token as the API key:
 
 ```python
 from openai import OpenAI
@@ -112,32 +116,38 @@ Off by default. Set `settings.capture: true` in `config.yaml` to record the raw 
 One binary, single-tenant, SQLite by default, near-zero ops. The call log is the spine — an append-only table of sniffed calls. The gateway holds a live in-memory view of the file config so vendor/key/model/price changes apply without a restart. The only mutation Songguo makes to a forwarded request is swapping in the upstream credential.
 
 ```
-internal/
-  config/   file-based vendor config + hot-reload (watch or poll)
-  store/    SQLite: append-only call log + tokens + aggregations
-  calls/    call-log domain types
-  pricing/  usage + price table -> cost
-  meter/    read-only modality/usage sniffing (JSON + SSE)
-  router/   号池 candidate selection, weighted RR, health/failover
-  proxy/    the transparent /v1 handler
-  api/      admin /api handlers
-  server/   HTTP wiring (proxy, api, dashboard, health)
-web/        React + Vite dashboard (built into dist/, embedded)
-cmd/songguo main entrypoint
+backend/
+  cmd/songguo   main entrypoint
+  internal/
+    config/   file-based vendor config + hot-reload (watch or poll)
+    store/    SQLite: append-only call log + tokens + aggregations
+    calls/    call-log domain types
+    pricing/  usage + price table -> cost
+    meter/    read-only modality/usage sniffing (JSON + SSE)
+    router/   号池 candidate selection, weighted RR, health/failover
+    proxy/    the transparent /v1 handler
+    api/      admin /api handlers
+    server/   HTTP wiring (proxy, api, dashboard, health)
+  web/        embeds the built dashboard (web/dist) via go:embed
+frontend/     React + Vite dashboard source (built into backend/web/dist)
+Makefile      dev / build orchestration
 ```
 
 ## Development
 
 ```bash
-# Rebuild the dashboard after frontend changes (then commit web/dist)
-cd web && npm install && npm run build && cd ..
+# Run backend (:8080) + Vite dev server (:5173) together; Ctrl+C stops both.
+# Vite proxies /api, /v1, /x, /healthz to the backend. Open http://localhost:5173
+make dev
 
-go build ./...
-go test ./...        # add -race for the full check
-go run ./cmd/songguo
+# Build the dashboard into backend/web/dist (embedded), then the ./songguo binary
+make build
+
+# Tests
+make test            # cd backend && go test ./...
 ```
 
-In dev you can run the Vite dev server (`cd web && npm run dev`) which proxies `/api` and `/v1` to a locally running `songguo`.
+The dashboard build output goes to `backend/web/dist`, which is committed so the Go binary builds without Node. After frontend changes, run `make build` (or `cd frontend && npm run build`) and commit the refreshed `backend/web/dist`.
 
 ## Not in v1 (deferred)
 
