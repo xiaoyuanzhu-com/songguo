@@ -1,0 +1,19 @@
+# Binaries
+/songguo
+/songguo-*
+
+# SQLite database and WAL/SHM sidecar files
+*.db
+*.db-*
+
+# Real config (only the example is committed)
+/config.yaml
+
+# Web build artifacts
+web/node_modules/
+web/dist/
+
+# Misc
+.DS_Store
+*.log
+/tmp/

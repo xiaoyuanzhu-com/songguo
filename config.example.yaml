@@ -1,0 +1,30 @@
+# Songguo configuration — vendors are file-based and hot-reloaded.
+# Tokens (consumer API keys + budgets) are NOT here; they live in SQLite and are managed via the dashboard.
+# The admin key for the dashboard/admin API comes from the SONGGUO_ADMIN_KEY env var, never this file.
+
+settings:
+  listen: ":8080"          # overridden by SONGGUO_LISTEN if set
+
+vendors:
+  - name: openai-main
+    base_url: https://api.openai.com
+    served_models: [gpt-4o, gpt-4o-mini, text-embedding-3-small]
+    priority: 1            # lower = preferred
+    weight: 1              # weighted round-robin within the same priority
+    credentials:           # the 号池 (key pool) — rotated to spread per-key rate limits
+      - id: openai-key-1
+        api_key: sk-REPLACE_ME
+    prices:                # per-model true cost, used for metering + cheapest-route
+      gpt-4o:                  { input: 2.50, output: 10.00, unit: per_1m_tokens }
+      gpt-4o-mini:            { input: 0.15, output: 0.60,  unit: per_1m_tokens }
+      text-embedding-3-small: { input: 0.02,                unit: per_1m_tokens }
+
+  - name: deepseek
+    base_url: https://api.deepseek.com
+    served_models: [deepseek-chat]
+    priority: 2
+    credentials:
+      - id: deepseek-key-1
+        api_key: sk-REPLACE_ME
+    prices:
+      deepseek-chat: { input: 0.27, output: 1.10, unit: per_1m_tokens }
