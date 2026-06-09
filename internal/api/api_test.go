@@ -719,7 +719,12 @@ func TestVendorsNeverLeakAPIKey(t *testing.T) {
 // --- (f) test-connection ---
 
 func TestVendorTestConnectionReachable(t *testing.T) {
+	// The probe must target the host ORIGIN (scheme://host), not base_url's path
+	// prefix, since base_url now carries a vendor-specific version path. Assert
+	// the probe lands on "/" even though base_url ends in /compatible-mode/v1.
+	var gotPath string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
 		w.WriteHeader(http.StatusUnauthorized) // even 401 means the host answered.
 	}))
 	defer upstream.Close()
@@ -729,7 +734,7 @@ settings:
   listen: ":8080"
 vendors:
   - name: mock
-    base_url: ` + upstream.URL + `
+    base_url: ` + upstream.URL + `/compatible-mode/v1
     served_models: [m1]
     credentials:
       - id: k1
@@ -756,6 +761,9 @@ vendors:
 	}
 	if res.Status != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", res.Status)
+	}
+	if gotPath != "/" {
+		t.Errorf("probe path = %q, want / (origin probe, base_url path stripped)", gotPath)
 	}
 }
 

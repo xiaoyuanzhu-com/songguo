@@ -217,7 +217,7 @@ func TestChatHappyPath(t *testing.T) {
 	yaml := fmt.Sprintf(`
 vendors:
   - name: vendorA
-    base_url: %s
+    base_url: %s/v1
     served_models: [gpt-4o]
     priority: 1
     credentials:
@@ -281,7 +281,7 @@ func TestEmbeddingsHappyPath(t *testing.T) {
 	yaml := fmt.Sprintf(`
 vendors:
   - name: emb
-    base_url: %s
+    base_url: %s/v1
     served_models: [text-embedding-3-small]
     priority: 1
     credentials:
@@ -376,7 +376,7 @@ func TestBudgetExceeded(t *testing.T) {
 	yaml := fmt.Sprintf(`
 vendors:
   - name: vendorA
-    base_url: %s
+    base_url: %s/v1
     served_models: [gpt-4o]
     priority: 1
     credentials:
@@ -445,7 +445,7 @@ func TestFailover(t *testing.T) {
 	yaml := fmt.Sprintf(`
 vendors:
   - name: vendorA
-    base_url: %s
+    base_url: %s/v1
     served_models: [gpt-4o]
     priority: 1
     credentials:
@@ -454,7 +454,7 @@ vendors:
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
   - name: vendorB
-    base_url: %s
+    base_url: %s/v1
     served_models: [gpt-4o]
     priority: 2
     credentials:
@@ -562,7 +562,7 @@ func TestStreaming(t *testing.T) {
 	yaml := fmt.Sprintf(`
 vendors:
   - name: vendorA
-    base_url: %s
+    base_url: %s/v1
     served_models: [gpt-4o]
     priority: 1
     credentials:
@@ -618,12 +618,14 @@ vendors:
 	}
 }
 
-// singleVendorYAML builds a one-vendor config serving gpt-4o.
+// singleVendorYAML builds a one-vendor config serving gpt-4o. The mock upstream
+// is mounted at the host root, so we append /v1 to base_url and Mode-A's suffix
+// (path minus /v1) lands the upstream call back on /chat/completions etc.
 func singleVendorYAML(baseURL, vendor, credID, apiKey string) string {
 	return fmt.Sprintf(`
 vendors:
   - name: %s
-    base_url: %s
+    base_url: %s/v1
     served_models: [gpt-4o]
     priority: 1
     credentials:
@@ -693,5 +695,318 @@ func TestServerSmoke(t *testing.T) {
 	defer presp.Body.Close()
 	if presp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("/v1 unauthenticated status = %d, want 401", presp.StatusCode)
+	}
+}
+
+// do issues an arbitrary-method request to the proxy with the given path, token
+// and (optional) body.
+func (e *testEnv) do(t *testing.T, method, path, token, body string) *http.Response {
+	t.Helper()
+	var rdr io.Reader
+	if body != "" {
+		rdr = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(method, e.server.URL+path, rdr)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := e.client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	return resp
+}
+
+// --- Test 11: Mode A reaches a non-/v1 vendor base prefix (e.g. Ark) ---
+
+func TestModelRoutedNonV1Prefix(t *testing.T) {
+	// This mock ONLY serves /api/v3/chat/completions, mimicking 火山方舟/Ark whose
+	// OpenAI-compatible base is …/api/v3. A /v1/chat/completions request must land
+	// on /api/v3/chat/completions after the base_url + suffix rewrite.
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v3/chat/completions" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"error":"wrong path"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}}`)
+	}))
+	defer mock.Close()
+
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: ark
+    base_url: %s/api/v3
+    served_models: [doubao-pro-32k]
+    priority: 1
+    credentials:
+      - id: arkKey
+        api_key: ark-secret
+    prices:
+      doubao-pro-32k: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+`, mock.URL)
+
+	st := openStore(t)
+	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	resp := env.post(t, "/v1/chat/completions", key, `{"model":"doubao-pro-32k","messages":[]}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (request must reach /api/v3/chat/completions)", resp.StatusCode)
+	}
+
+	rows := env.ledgerRows(t)
+	if len(rows) != 1 {
+		t.Fatalf("ledger rows = %d, want 1", len(rows))
+	}
+	wantCost := 2.50*10/1e6 + 10.00*20/1e6
+	if !approxEqual(rows[0].Cost, wantCost) {
+		t.Errorf("cost = %v, want %v", rows[0].Cost, wantCost)
+	}
+	if rows[0].Vendor != "ark" || rows[0].Status != 200 || rows[0].Model != "doubao-pro-32k" {
+		t.Errorf("row = %+v", rows[0])
+	}
+}
+
+// pathRecorder is a mock vendor host that records every request path it sees and
+// serves a DashScope-style response with top-level usage.
+type pathRecorder struct {
+	mu    sync.Mutex
+	paths []string
+	auth  string
+}
+
+func (p *pathRecorder) handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p.mu.Lock()
+		p.paths = append(p.paths, r.URL.Path)
+		p.auth = r.Header.Get("Authorization")
+		p.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		// DashScope native shape: top-level usage with input/output_tokens.
+		_, _ = io.WriteString(w, `{"output":{"text":"hi"},"usage":{"input_tokens":12,"output_tokens":8,"total_tokens":20}}`)
+	}
+}
+
+// passthroughYAML builds a one-vendor config for passthrough tests. base_url
+// carries a non-trivial path prefix (DashScope's /compatible-mode/v1); Mode B
+// must strip it and forward to the host origin. served_models/prices key off
+// the native model name so cost is computed.
+func passthroughYAML(baseURL, vendor string) string {
+	return fmt.Sprintf(`
+vendors:
+  - name: %s
+    base_url: %s/compatible-mode/v1
+    served_models: [qwen-plus]
+    priority: 1
+    credentials:
+      - id: %s-key
+        api_key: %s-secret
+    prices:
+      qwen-plus: { input: 0.40, output: 1.20, unit: per_1m_tokens }
+`, vendor, baseURL, vendor, vendor)
+}
+
+// --- Test 12: Mode B native submit forwarded to origin+rest, usage metered ---
+
+func TestPassthroughNativeUsage(t *testing.T) {
+	rec := &pathRecorder{}
+	mock := httptest.NewServer(rec.handler())
+	defer mock.Close()
+
+	yaml := passthroughYAML(mock.URL, "bailian")
+	st := openStore(t)
+	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	// Native generation endpoint with a model in the body.
+	body := `{"model":"qwen-plus","input":{"prompt":"hi"}}`
+	resp := env.post(t, "/x/bailian/api/v1/services/aigc/text-generation/generation", key, body)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	rec.mu.Lock()
+	gotPaths := append([]string(nil), rec.paths...)
+	gotAuth := rec.auth
+	rec.mu.Unlock()
+
+	// The base_url path prefix (/compatible-mode/v1) must be stripped: the native
+	// path is forwarded to the host origin verbatim.
+	if len(gotPaths) != 1 || gotPaths[0] != "/api/v1/services/aigc/text-generation/generation" {
+		t.Fatalf("upstream paths = %v, want [/api/v1/services/aigc/text-generation/generation]", gotPaths)
+	}
+	if gotAuth != "Bearer bailian-secret" {
+		t.Errorf("upstream auth = %q, want the vendor key", gotAuth)
+	}
+
+	rows := env.ledgerRows(t)
+	if len(rows) != 1 {
+		t.Fatalf("ledger rows = %d, want 1", len(rows))
+	}
+	// input_tokens=12, output_tokens=8 -> 0.40*12/1e6 + 1.20*8/1e6.
+	wantCost := 0.40*12/1e6 + 1.20*8/1e6
+	if !approxEqual(rows[0].Cost, wantCost) {
+		t.Errorf("cost = %v, want %v", rows[0].Cost, wantCost)
+	}
+	if rows[0].Vendor != "bailian" || rows[0].Status != 200 {
+		t.Errorf("row = %+v", rows[0])
+	}
+}
+
+// --- Test 13: Mode B model-less GET (async task poll) is forwarded, not 400 ---
+
+func TestPassthroughModelLessGet(t *testing.T) {
+	rec := &pathRecorder{}
+	mock := httptest.NewServer(rec.handler())
+	defer mock.Close()
+
+	yaml := passthroughYAML(mock.URL, "bailian")
+	st := openStore(t)
+	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	// No body, no model: an async task poll. Must NOT be rejected as missing_model.
+	resp := env.do(t, http.MethodGet, "/x/bailian/api/v1/tasks/abc", key, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (model-less GET must be forwarded)", resp.StatusCode)
+	}
+
+	rec.mu.Lock()
+	gotPaths := append([]string(nil), rec.paths...)
+	rec.mu.Unlock()
+	if len(gotPaths) != 1 || gotPaths[0] != "/api/v1/tasks/abc" {
+		t.Fatalf("upstream paths = %v, want [/api/v1/tasks/abc]", gotPaths)
+	}
+
+	rows := env.ledgerRows(t)
+	if len(rows) != 1 || rows[0].Status != 200 {
+		t.Fatalf("ledger rows = %+v, want 1 with status 200", rows)
+	}
+}
+
+// --- Test 14: Mode B unknown vendor -> 404 ---
+
+func TestPassthroughUnknownVendor(t *testing.T) {
+	rec := &pathRecorder{}
+	mock := httptest.NewServer(rec.handler())
+	defer mock.Close()
+
+	yaml := passthroughYAML(mock.URL, "bailian")
+	st := openStore(t)
+	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	resp := env.do(t, http.MethodGet, "/x/nope/api/v1/tasks/abc", key, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for unknown vendor", resp.StatusCode)
+	}
+	rec.mu.Lock()
+	calls := len(rec.paths)
+	rec.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("upstream called %d times for unknown vendor", calls)
+	}
+}
+
+// --- Test 15: Mode B passthrough scope enforces vendor allowlist -> 403 ---
+
+func TestPassthroughScope(t *testing.T) {
+	rec := &pathRecorder{}
+	mock := httptest.NewServer(rec.handler())
+	defer mock.Close()
+
+	yaml := passthroughYAML(mock.URL, "bailian")
+	st := openStore(t)
+	// Token scoped to a different vendor: it may not address bailian.
+	_, key := mustToken(t, st, store.NewToken{Name: "t", Scope: []string{"othervendor"}})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	resp := env.post(t, "/x/bailian/api/v1/services/x/generation", key, `{"model":"qwen-plus"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (vendor not in scope)", resp.StatusCode)
+	}
+	rec.mu.Lock()
+	calls := len(rec.paths)
+	rec.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("upstream called despite scope rejection")
+	}
+}
+
+// --- Test 16: Mode B fails over across the vendor's own credentials ---
+
+func TestPassthroughCredentialRetry(t *testing.T) {
+	// The mock 500s on the first credential and 200s on the second, identifying
+	// the credential by the swapped Authorization header.
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer key1" {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"error":"down"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`)
+	}))
+	defer mock.Close()
+
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: bailian
+    base_url: %s/compatible-mode/v1
+    served_models: [qwen-plus]
+    priority: 1
+    credentials:
+      - id: c1
+        api_key: key1
+      - id: c2
+        api_key: key2
+    prices:
+      qwen-plus: { input: 0.40, output: 1.20, unit: per_1m_tokens }
+`, mock.URL)
+
+	st := openStore(t)
+	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	resp := env.post(t, "/x/bailian/api/v1/services/x/generation", key, `{"model":"qwen-plus"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (retry on 2nd credential)", resp.StatusCode)
+	}
+
+	rows := env.ledgerRows(t)
+	if len(rows) != 2 {
+		t.Fatalf("ledger rows = %d, want 2 (one per credential attempt)", len(rows))
+	}
+	var got500, got200 bool
+	for _, r := range rows {
+		if r.Vendor != "bailian" {
+			t.Errorf("row vendor = %q, want bailian (no cross-vendor failover)", r.Vendor)
+		}
+		switch r.Status {
+		case 500:
+			got500 = true
+		case 200:
+			got200 = true
+		}
+	}
+	if !got500 || !got200 {
+		t.Errorf("expected one 500 row and one 200 row, got %+v", rows)
 	}
 }

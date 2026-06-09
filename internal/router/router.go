@@ -96,6 +96,31 @@ func (r *Router) Candidates(model string) ([]Target, error) {
 	return targets, nil
 }
 
+// CandidatesForVendor returns the attempts for a single named vendor: its
+// credentials in rotated order (reusing the per-vendor 号池 rotation). It is used
+// by explicit-vendor passthrough, where the caller has pinned the vendor and
+// failover is across that vendor's own key pool only. Returns ErrNoVendor if no
+// vendor of that name exists.
+func (r *Router) CandidatesForVendor(name string) ([]Target, error) {
+	snap := r.snapshot()
+	if snap == nil {
+		return nil, ErrNoVendor
+	}
+	v, ok := snap.Vendor(name)
+	if !ok {
+		return nil, ErrNoVendor
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	targets := r.credTargets(v)
+	if len(targets) == 0 {
+		return nil, ErrNoVendor
+	}
+	return targets, nil
+}
+
 // orderGroup orders one priority group: weighted round-robin first, then a
 // stable partition placing cooling-down vendors after healthy ones.
 func (r *Router) orderGroup(model string, prio int, group []config.Vendor, now time.Time) []config.Vendor {

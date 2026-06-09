@@ -3,9 +3,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
-	"strings"
+	"net/url"
 	"time"
 )
 
@@ -37,9 +38,18 @@ func (a *api) serverError(w http.ResponseWriter, op string, err error) {
 	writeError(w, http.StatusInternalServerError, "internal", "internal error")
 }
 
-// trimRightSlash drops a single trailing slash from a URL base.
-func trimRightSlash(s string) string {
-	return strings.TrimRight(s, "/")
+// originOf returns the scheme://host of a base URL, stripping any path. The
+// vendor connectivity probe targets the origin because base_url now carries a
+// vendor-specific path prefix that may not expose an OpenAI-style route.
+func originOf(base string) (string, error) {
+	u, err := url.Parse(base)
+	if err != nil {
+		return "", fmt.Errorf("parse base_url %q: %w", base, err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("base_url %q missing scheme or host", base)
+	}
+	return u.Scheme + "://" + u.Host, nil
 }
 
 // contextWithTimeout derives a timeout context from the request context.

@@ -17,6 +17,7 @@ Songguo is **single-tenant, multi-token**: one owner, many scoped keys. No accou
 ## Features (v1)
 
 - **Transparent proxy** for OpenAI-compatible APIs (chat, embeddings), including **SSE streaming** — forwarded chunk-by-chunk, never buffered.
+- **Two routing modes** — model-routed `/v1/...` for OpenAI-compatible SDKs, and explicit-vendor passthrough `/x/<vendor>/...` for native, rerank, and async submit→poll APIs (see below).
 - **号池 routing + failover** — multiple vendors per model and multiple credentials per vendor; priority → weighted round-robin, credential rotation, automatic failover on `429`/`5xx`.
 - **Budgets & scope** per token (hard cap, allowed models, per-token RPM). Over-budget calls are rejected, not transformed.
 - **Read-only metering** — usage sniffed from the native payload (with coarse fallback); a parse failure never blocks traffic. Per-model pricing yields true cost.
@@ -57,7 +58,7 @@ Vendors, credentials, and prices live in `config.yaml` (source of truth, hot-rel
 ```yaml
 vendors:
   - name: openai-main
-    base_url: https://api.openai.com      # host root (no /v1)
+    base_url: https://api.openai.com/v1   # vendor's OpenAI-compatible base, INCLUDING any version/path prefix
     served_models: [gpt-4o, text-embedding-3-small]
     priority: 1                            # lower = preferred
     weight: 1                              # weighted round-robin within a priority
@@ -66,6 +67,15 @@ vendors:
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
 ```
+
+### Routing modes
+
+Songguo's transparent proxy serves two shapes from one handler, chosen by the request path:
+
+- **Model-routed (`/v1/...`)** — the ergonomic default. Point any OpenAI-compatible SDK at `http://<songguo>/v1`; the model is read from the body and routed across every vendor that serves it (priority → weighted RR → credential rotation → failover). The upstream URL is `base_url + (path after /v1)`.
+- **Explicit passthrough (`/x/<vendor>/...`)** — pin a vendor by name and forward the rest of the path to its **host** (`base_url`'s `scheme://host`, path stripped). **No model is required**, which makes DashScope's native generation endpoints and async image/video **submit→poll** flows forwardable (e.g. `POST /x/bailian/api/v1/services/aigc/.../generation`, then `GET /x/bailian/api/v1/tasks/{id}`). Failover here is across that vendor's **own credentials** only; a scoped token may be limited to specific vendors.
+
+**`base_url` convention:** it is the vendor's *published* base **including any version/path prefix** — OpenAI `https://api.openai.com/v1`, Ark/方舟 `https://ark.cn-beijing.volces.com/api/v3`, DashScope/百炼 `https://dashscope.aliyuncs.com/compatible-mode/v1`, DeepSeek `https://api.deepseek.com`. So a model-routed `/v1/chat/completions` reaches `…/api/v3/chat/completions` on Ark, while a passthrough `/x/bailian/api/v1/tasks/abc` reaches `https://dashscope.aliyuncs.com/api/v1/tasks/abc`.
 
 ### Environment variables
 
@@ -85,7 +95,8 @@ vendors:
 
 | Path | Purpose |
 |------|---------|
-| `/v1/*` | Transparent proxy (consumer traffic) |
+| `/v1/*` | Transparent proxy, model-routed (consumer traffic) |
+| `/x/<vendor>/*` | Transparent proxy, explicit-vendor passthrough (native / async / rerank) |
 | `/api/*` | Admin REST API (admin-key gated) |
 | `/` | Embedded dashboard |
 | `/healthz` | Liveness |
@@ -124,4 +135,4 @@ In dev you can run the Vite dev server (`cd web && npm run dev`) which proxies `
 
 ## Not in v1 (deferred)
 
-Async multimodal channels (image/video submit→poll), MCP tool proxying, tag-based business attribution, and cross-model cost×latency optimization. The ledger schema already carries the fields these will use.
+Async multimodal channels (image/video submit→poll) are now **forwardable** via `/x/<vendor>/...` passthrough — submit and poll both flow through and are logged. Still deferred to v2: **realtime WebSocket voice**, **per-image / per-second media metering** (passthrough media calls are forwarded and recorded, but token-based cost only applies when the vendor returns token usage), MCP tool proxying, tag-based business attribution, and cross-model cost×latency optimization. The ledger schema already carries the fields these will use.

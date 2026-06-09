@@ -442,7 +442,13 @@ func (a *api) handleTestVendor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	url := trimRightSlash(v.BaseURL) + "/v1/models"
+	// Probe the vendor's host origin (scheme://host), since base_url now carries
+	// a vendor-specific path prefix we can't assume an OpenAI /v1/models route on.
+	url, err := originOf(v.BaseURL)
+	if err != nil {
+		writeJSON(w, http.StatusOK, testVendorView{Reachable: false, Error: err.Error()})
+		return
+	}
 	ctx, cancel := contextWithTimeout(r, 5*time.Second)
 	defer cancel()
 

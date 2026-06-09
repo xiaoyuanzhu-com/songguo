@@ -298,6 +298,63 @@ vendors:
 	}
 }
 
+func TestCandidatesForVendorRotates(t *testing.T) {
+	snap := buildSnapshot(t, `
+vendors:
+  - name: bailian
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    served_models: [qwen-plus]
+    credentials:
+      - {id: c1, api_key: k1}
+      - {id: c2, api_key: k2}
+`)
+	r := New(staticSnap(snap))
+
+	// Each call returns both credentials, rotating the leading one. Failover in
+	// passthrough mode walks this list across the vendor's own key pool.
+	firsts := make([]string, 0, 2)
+	for i := 0; i < 2; i++ {
+		got, err := r.CandidatesForVendor("bailian")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("call %d: want 2 targets, got %d", i, len(got))
+		}
+		for _, tg := range got {
+			if tg.Vendor.Name != "bailian" {
+				t.Fatalf("target vendor = %q, want bailian", tg.Vendor.Name)
+			}
+		}
+		firsts = append(firsts, got[0].Credential.ID)
+	}
+	if firsts[0] != "c1" || firsts[1] != "c2" {
+		t.Fatalf("rotation firsts = %v, want [c1 c2]", firsts)
+	}
+}
+
+func TestCandidatesForVendorMissing(t *testing.T) {
+	snap := buildSnapshot(t, `
+vendors:
+  - name: bailian
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    served_models: [qwen-plus]
+    credentials:
+      - {id: c1, api_key: k1}
+`)
+	r := New(staticSnap(snap))
+	if _, err := r.CandidatesForVendor("nope"); !errors.Is(err, ErrNoVendor) {
+		t.Fatalf("want ErrNoVendor for missing vendor, got %v", err)
+	}
+}
+
+func TestCandidatesForVendorNilSnapshot(t *testing.T) {
+	r := New(func() *config.Snapshot { return nil })
+	if _, err := r.CandidatesForVendor("x"); !errors.Is(err, ErrNoVendor) {
+		t.Fatalf("want ErrNoVendor on nil snapshot, got %v", err)
+	}
+}
+
 func TestConcurrencySmoke(t *testing.T) {
 	snap := buildSnapshot(t, `
 vendors:

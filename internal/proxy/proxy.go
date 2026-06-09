@@ -7,6 +7,17 @@
 // Authorization header, swapped from the consumer's Songguo token to the chosen
 // upstream credential. Metering is read-only sniffing and must never block or
 // alter traffic.
+//
+// Two routing modes share this handler, decided by the request path:
+//
+//   - Model-routed (/v1/...): the ergonomic default for OpenAI-compatible SDKs.
+//     The model is read from the body, candidates span every vendor serving it
+//     (priority/weighted-RR/failover), and the upstream URL is the vendor's
+//     published base_url plus the path suffix after /v1.
+//   - Passthrough (/x/<vendor>/...): the caller pins a vendor by name; no model
+//     is required (so model-less async polls work), failover is across that
+//     vendor's own credentials only, and the rest of the path is forwarded to
+//     the vendor's host origin (base_url with its path stripped).
 package proxy
 
 import (
@@ -18,6 +29,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -151,22 +163,16 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Classify.
-	res := meter.Classify(r.Method, r.URL.Path, body)
-	model := res.Model
-	modality := res.Modality
-	if model == "" {
-		writeError(w, http.StatusBadRequest, "missing_model", "missing model")
+	// 3. Resolve the route. Mode is decided by the mount path: explicit-vendor
+	// passthrough under /x/, otherwise model-routed under /v1/. Resolution sets
+	// the model/modality, the candidate targets (with their failover policy),
+	// and the per-target upstream-URL builder.
+	rt, ok := h.resolve(w, r, token, body)
+	if !ok {
 		return
 	}
 
-	// 4. Scope.
-	if len(token.Scope) > 0 && !contains(token.Scope, model) {
-		writeError(w, http.StatusForbidden, "model_not_allowed", "model not allowed for this token")
-		return
-	}
-
-	// 5. Budget (coarse pre-check).
+	// 4. Budget (coarse pre-check).
 	if token.Budget != nil {
 		spent, err := h.store.SpendByToken(token.ID, nil)
 		if err != nil {
@@ -177,34 +183,24 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 6. Rate limit.
+	// 5. Rate limit.
 	if !h.limiter.allow(token.ID, token.RPM) {
 		writeError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded")
 		return
 	}
 
-	// 7. Route + failover.
-	targets, err := h.router.Candidates(model)
-	if err != nil {
-		if errors.Is(err, router.ErrNoVendor) {
-			writeError(w, http.StatusBadGateway, "no_upstream", "no upstream for model")
-			return
-		}
-		h.logger.Error("routing failed", "err", err)
-		writeError(w, http.StatusBadGateway, "no_upstream", "routing failed")
-		return
-	}
-
 	tags := extractTags(r.Header.Get("X-Songguo-Tags"), body)
 
-	for i, t := range targets {
+	// 6. Forward with failover. The loop is identical for both modes; only the
+	// candidate set and the upstream URL (built by rt.upstreamURL) differ.
+	for i, t := range rt.targets {
 		attempt := i + 1
-		last := i == len(targets)-1
+		last := i == len(rt.targets)-1
 
-		upReq, err := h.buildUpstreamRequest(r, t, body)
+		upReq, err := h.buildUpstreamRequest(r, t, rt.upstreamURL(t), body)
 		if err != nil {
 			h.logger.Error("build upstream request failed", "err", err, "vendor", t.Vendor.Name)
-			h.recordFailure(token.ID, model, modality, t, attempt, 0, err, 0, tags)
+			h.recordFailure(token.ID, rt.model, rt.modality, t, attempt, 0, err, 0, tags)
 			h.router.Report(t.Vendor.Name, t.Credential.ID, 0, err)
 			if last {
 				writeError(w, http.StatusBadGateway, "upstream_error", "failed to build upstream request")
@@ -219,7 +215,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// Transport error: failover-eligible.
 		if err != nil {
-			h.recordFailure(token.ID, model, modality, t, attempt, 0, err, latency, tags)
+			h.recordFailure(token.ID, rt.model, rt.modality, t, attempt, 0, err, latency, tags)
 			h.router.Report(t.Vendor.Name, t.Credential.ID, 0, err)
 			if last {
 				// Transparency: surface the real transport failure verbatim
@@ -232,7 +228,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		failover := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
 		if failover && !last {
-			h.recordFailure(token.ID, model, modality, t, attempt, resp.StatusCode,
+			h.recordFailure(token.ID, rt.model, rt.modality, t, attempt, resp.StatusCode,
 				fmt.Errorf("upstream status %d", resp.StatusCode), latency, tags)
 			h.router.Report(t.Vendor.Name, t.Credential.ID, resp.StatusCode, nil)
 			drainAndClose(resp.Body)
@@ -242,22 +238,134 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// This is the chosen response (either a non-failover status, or the last
 		// target even if it failed). Report health, then forward verbatim.
 		h.router.Report(t.Vendor.Name, t.Credential.ID, resp.StatusCode, nil)
-		h.forward(w, r, resp, token.ID, model, modality, t, attempt, latency, tags)
+		h.forward(w, r, resp, token.ID, rt.model, rt.modality, t, attempt, latency, tags)
 		return
 	}
 }
 
-// buildUpstreamRequest constructs the upstream request: URL from the vendor base
-// plus the original path and query, original method, a fresh body reader over
-// the buffered bytes, all original headers minus hop-by-hop and Content-Length,
-// and the only mutation — Authorization set to the chosen credential.
-func (h *handler) buildUpstreamRequest(r *http.Request, t router.Target, body []byte) (*http.Request, error) {
-	base := strings.TrimRight(t.Vendor.BaseURL, "/")
-	upURL := base + r.URL.Path
-	if r.URL.RawQuery != "" {
-		upURL += "?" + r.URL.RawQuery
+// route is the resolved plan for a request: the targets to try (in order, with
+// their failover policy already encoded as a set of own credentials or a
+// cross-vendor list), the model/modality to record, and a per-target builder
+// for the upstream URL.
+type route struct {
+	model       string
+	modality    ledger.Modality
+	targets     []router.Target
+	upstreamURL func(router.Target) string
+}
+
+// resolve dispatches on the request path to build the route, enforcing
+// per-mode scope and writing any error response itself. It returns ok=false
+// when it has already responded.
+func (h *handler) resolve(w http.ResponseWriter, r *http.Request, token store.Token, body []byte) (route, bool) {
+	if rest, isX := strings.CutPrefix(r.URL.Path, "/x/"); isX {
+		return h.resolvePassthrough(w, r, token, body, rest)
+	}
+	return h.resolveModelRouted(w, r, token, body)
+}
+
+// resolveModelRouted handles Mode A: model-routed traffic mounted at /v1/. The
+// upstream path is the request path with the /v1 mount prefix stripped,
+// appended to the vendor's published (version-inclusive) base_url.
+func (h *handler) resolveModelRouted(w http.ResponseWriter, r *http.Request, token store.Token, body []byte) (route, bool) {
+	suffix := strings.TrimPrefix(r.URL.Path, "/v1")
+
+	res := meter.Classify(r.Method, r.URL.Path, body)
+	if res.Model == "" {
+		writeError(w, http.StatusBadRequest, "missing_model", "missing model")
+		return route{}, false
 	}
 
+	// Scope: the model must be allowed when the token is scoped.
+	if len(token.Scope) > 0 && !contains(token.Scope, res.Model) {
+		writeError(w, http.StatusForbidden, "model_not_allowed", "model not allowed for this token")
+		return route{}, false
+	}
+
+	targets, err := h.router.Candidates(res.Model)
+	if err != nil {
+		if errors.Is(err, router.ErrNoVendor) {
+			writeError(w, http.StatusBadGateway, "no_upstream", "no upstream for model")
+			return route{}, false
+		}
+		h.logger.Error("routing failed", "err", err)
+		writeError(w, http.StatusBadGateway, "no_upstream", "routing failed")
+		return route{}, false
+	}
+
+	return route{
+		model:    res.Model,
+		modality: res.Modality,
+		targets:  targets,
+		upstreamURL: func(t router.Target) string {
+			return joinQuery(strings.TrimRight(t.Vendor.BaseURL, "/")+suffix, r.URL.RawQuery)
+		},
+	}, true
+}
+
+// resolvePassthrough handles Mode B: explicit-vendor passthrough mounted at
+// /x/<vendor>/<rest>. No model is required (this is what lets model-less calls
+// like async GET /api/v1/tasks/{id} polls through). The rest of the path is
+// appended to the vendor's host origin (base_url's scheme://host, path
+// stripped), so native/async/rerank endpoints are reachable. Failover is across
+// the named vendor's own credentials only.
+func (h *handler) resolvePassthrough(w http.ResponseWriter, r *http.Request, token store.Token, body []byte, rest string) (route, bool) {
+	vendorName, rest, ok := strings.Cut(rest, "/")
+	if !ok || vendorName == "" || rest == "" {
+		writeError(w, http.StatusNotFound, "not_found", "expected /x/<vendor>/<path>")
+		return route{}, false
+	}
+	rest = "/" + rest
+
+	snap := h.snapshot()
+	if snap == nil {
+		writeError(w, http.StatusNotFound, "unknown_vendor", "unknown vendor")
+		return route{}, false
+	}
+	vendor, ok := snap.Vendor(vendorName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "unknown_vendor", "unknown vendor")
+		return route{}, false
+	}
+
+	// Scope: in passthrough mode a scoped token restricts which VENDORS it may
+	// address, not which models (model is often absent here).
+	if len(token.Scope) > 0 && !contains(token.Scope, vendorName) {
+		writeError(w, http.StatusForbidden, "vendor_not_allowed", "vendor not allowed for this token")
+		return route{}, false
+	}
+
+	origin, err := originOf(vendor.BaseURL)
+	if err != nil {
+		h.logger.Error("vendor base_url invalid", "err", err, "vendor", vendorName)
+		writeError(w, http.StatusBadGateway, "upstream_error", "vendor base_url invalid")
+		return route{}, false
+	}
+
+	targets, err := h.router.CandidatesForVendor(vendorName)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "no_upstream", "no credentials for vendor")
+		return route{}, false
+	}
+
+	// Best-effort metering only; model may be empty for model-less calls.
+	res := meter.Classify(r.Method, rest, body)
+
+	return route{
+		model:    res.Model,
+		modality: res.Modality,
+		targets:  targets,
+		upstreamURL: func(router.Target) string {
+			return joinQuery(origin+rest, r.URL.RawQuery)
+		},
+	}, true
+}
+
+// buildUpstreamRequest constructs the upstream request: the given URL, the
+// original method, a fresh body reader over the buffered bytes, all original
+// headers minus hop-by-hop and Content-Length, and the only mutation —
+// Authorization set to the chosen credential.
+func (h *handler) buildUpstreamRequest(r *http.Request, t router.Target, upURL string, body []byte) (*http.Request, error) {
 	upReq, err := http.NewRequestWithContext(r.Context(), r.Method, upURL, bytesReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("new upstream request: %w", err)
@@ -266,6 +374,28 @@ func (h *handler) buildUpstreamRequest(r *http.Request, t router.Target, body []
 	upReq.ContentLength = int64(len(body))
 	upReq.Header.Set("Authorization", "Bearer "+t.Credential.APIKey)
 	return upReq, nil
+}
+
+// joinQuery appends a raw query string to a URL if non-empty.
+func joinQuery(u, rawQuery string) string {
+	if rawQuery == "" {
+		return u
+	}
+	return u + "?" + rawQuery
+}
+
+// originOf returns the scheme://host of a base URL, stripping any path so
+// passthrough can target native endpoints that live outside the vendor's
+// OpenAI-compatible path prefix.
+func originOf(base string) (string, error) {
+	u, err := url.Parse(base)
+	if err != nil {
+		return "", fmt.Errorf("parse base_url %q: %w", base, err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("base_url %q missing scheme or host", base)
+	}
+	return u.Scheme + "://" + u.Host, nil
 }
 
 // forward copies the chosen upstream response to the client verbatim and sniffs
