@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"hash/fnv"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -13,6 +15,10 @@ import (
 
 // debounceInterval coalesces the burst of events editors emit per save.
 const debounceInterval = 200 * time.Millisecond
+
+// pollInterval is how often the config file is stat-ed when inotify is
+// unavailable and the Manager falls back to polling.
+const pollInterval = time.Second
 
 // Manager owns the live config: it loads the file, watches it via fsnotify,
 // and atomically swaps in new validated Snapshots on change. A bad edit is
@@ -68,21 +74,35 @@ func NewManager(path string, logger *slog.Logger) (*Manager, error) {
 		return nil, err
 	}
 
-	watcher, err := fsnotify.NewWatcher()
+	// Try inotify first. If it's unavailable — the inotify instance limit is
+	// exhausted, or we're in a container / on a filesystem that doesn't
+	// support it — fall back to mtime polling rather than failing. A gateway
+	// must never refuse to start just because file watching isn't available.
+	if w, werr := newDirWatcher(m.dir); werr == nil {
+		m.watcher = w
+		go m.runWatch()
+	} else {
+		logger.Warn("inotify unavailable; falling back to config polling",
+			"err", werr, "interval", pollInterval)
+		go m.runPoll(readState(m.path))
+	}
+	return m, nil
+}
+
+// newDirWatcher creates an fsnotify watcher on dir. We watch the parent
+// directory rather than the file itself: editors that save via atomic
+// rename/replace swap the inode out from under a file-level watch, which would
+// silently stop firing.
+func newDirWatcher(dir string) (*fsnotify.Watcher, error) {
+	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, fmt.Errorf("create config watcher: %w", err)
 	}
-	// Watch the parent directory rather than the file itself: editors that
-	// save via atomic rename/replace swap the inode out from under a
-	// file-level watch, which would silently stop firing.
-	if err := watcher.Add(m.dir); err != nil {
-		watcher.Close()
-		return nil, fmt.Errorf("watch config dir %q: %w", m.dir, err)
+	if err := w.Add(dir); err != nil {
+		w.Close()
+		return nil, fmt.Errorf("watch config dir %q: %w", dir, err)
 	}
-	m.watcher = watcher
-
-	go m.run()
-	return m, nil
+	return w, nil
 }
 
 // Current returns the live snapshot. It is safe for concurrent use and never
@@ -108,12 +128,15 @@ func (m *Manager) Close() error {
 		close(m.done)
 	}
 	<-m.closed
-	return m.watcher.Close()
+	if m.watcher != nil {
+		return m.watcher.Close()
+	}
+	return nil
 }
 
-// run is the single event loop. It owns the watcher's channels and the
+// runWatch is the inotify event loop. It owns the watcher's channels and the
 // debounce timer, so no locking is needed for reload bookkeeping.
-func (m *Manager) run() {
+func (m *Manager) runWatch() {
 	defer close(m.closed)
 
 	var timer *time.Timer
@@ -197,5 +220,50 @@ func (m *Manager) reload() {
 
 	for _, fn := range cbs {
 		fn(snap)
+	}
+}
+
+// pollState fingerprints the config file's contents so polling detects any
+// change regardless of filesystem mtime granularity. The zero value means the
+// file is absent or unreadable.
+type pollState struct {
+	exists bool
+	hash   uint64
+	size   int64
+}
+
+// readState reads and fingerprints the file. Config files are tiny, so reading
+// on every poll is negligible and far more reliable than comparing mtimes.
+func readState(path string) pollState {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return pollState{}
+	}
+	h := fnv.New64a()
+	_, _ = h.Write(data)
+	return pollState{exists: true, hash: h.Sum64(), size: int64(len(data))}
+}
+
+// runPoll is the fallback loop used when inotify is unavailable: it fingerprints
+// the config file on an interval and reloads when the contents change (or the
+// file appears/disappears). The baseline is captured synchronously in
+// NewManager so a write racing just after startup is never folded into it.
+func (m *Manager) runPoll(last pollState) {
+	defer close(m.closed)
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.done:
+			return
+		case <-ticker.C:
+			cur := readState(m.path)
+			if cur != last {
+				last = cur
+				m.reload()
+			}
+		}
 	}
 }
