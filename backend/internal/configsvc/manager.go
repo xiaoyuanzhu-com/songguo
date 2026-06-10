@@ -85,9 +85,9 @@ func (m *Manager) build() (*config.Snapshot, error) {
 		if !svc.Enabled {
 			continue
 		}
-		if len(svc.Credentials) == 0 || len(svc.Models) == 0 {
-			m.logger.Warn("skipping incomplete service (no credentials or models)",
-				"service", svc.Name, "credentials", len(svc.Credentials), "models", len(svc.Models))
+		if svc.APIKey == "" || len(svc.Models) == 0 {
+			m.logger.Warn("skipping incomplete service (no API key or models)",
+				"service", svc.Name, "has_key", svc.APIKey != "", "models", len(svc.Models))
 			continue
 		}
 		cfg.Vendors = append(cfg.Vendors, vendorFromService(svc, m.logger))
@@ -111,11 +111,6 @@ func vendorFromService(svc store.Service, logger *slog.Logger) config.Vendor {
 		prices[m.Model] = config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: unit}
 	}
 
-	creds := make([]config.Credential, 0, len(svc.Credentials))
-	for _, c := range svc.Credentials {
-		creds = append(creds, config.Credential{ID: c.ID, APIKey: c.APIKey})
-	}
-
 	wires := make([]string, 0, len(svc.Wires))
 	for _, w := range svc.Wires {
 		if _, ok := wire.Get(w); !ok {
@@ -132,7 +127,7 @@ func vendorFromService(svc store.Service, logger *slog.Logger) config.Vendor {
 		ServedModels:   models,
 		Priority:       svc.Priority,
 		Weight:         svc.Weight,
-		Credentials:    creds,
+		Credential:     config.Credential{ID: svc.ID, APIKey: svc.APIKey},
 		Prices:         prices,
 		Wires:          wires,
 		AllowUnmatched: svc.AllowUnmatched,

@@ -1,13 +1,5 @@
 import { useState } from 'react';
-import {
-  CheckCircle2,
-  Pencil,
-  Plus,
-  Server,
-  ShoppingBag,
-  Trash2,
-  XCircle,
-} from 'lucide-react';
+import { CheckCircle2, KeyRound, Pencil, Plus, Server, Trash2, XCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Service, VendorTestResult } from '../api/types';
@@ -24,7 +16,6 @@ import styles from './Services.module.css';
 
 type ModalState =
   | { kind: 'none' }
-  | { kind: 'create' }
   | { kind: 'edit'; service: Service }
   | { kind: 'delete'; service: Service };
 
@@ -50,14 +41,9 @@ export function ServicesPage() {
     <Page
       title="Services"
       actions={
-        <>
-          <Link to="/catalog" className="btn">
-            <ShoppingBag size={15} /> Browse catalog
-          </Link>
-          <button className="btn btn-primary" onClick={() => setModal({ kind: 'create' })}>
-            <Plus size={15} /> Add service
-          </button>
-        </>
+        <Link to="/services/new" className="btn btn-primary">
+          <Plus size={15} /> Add service
+        </Link>
       }
     >
       {error ? (
@@ -77,8 +63,8 @@ export function ServicesPage() {
           title="No services yet"
           hint={
             <>
-              <Link to="/catalog">Browse the catalog</Link> to add a known provider in one click,
-              or add a custom service manually.
+              <Link to="/services/new">Add a service</Link> — pick a known provider preset or
+              configure a custom endpoint.
             </>
           }
         />
@@ -96,14 +82,14 @@ export function ServicesPage() {
         </div>
       )}
 
-      {(modal.kind === 'create' || modal.kind === 'edit') && (
+      {modal.kind === 'edit' && (
         <ServiceForm
-          editing={modal.kind === 'edit' ? modal.service : undefined}
+          editing={modal.service}
           onClose={close}
-          onSaved={(_s, created) => {
+          onSaved={() => {
             refetch();
             close();
-            toast.success(created ? 'Service added.' : 'Service updated.');
+            toast.success('Service updated.');
           }}
         />
       )}
@@ -124,8 +110,8 @@ export function ServicesPage() {
           }
         >
           <p className={styles.confirmText}>
-            Remove <strong>{modal.service.name}</strong>? Its credentials and prices are deleted and
-            it will stop routing immediately. This cannot be undone.
+            Remove <strong>{modal.service.name}</strong>? Its key and prices are deleted and it
+            will stop routing immediately. This cannot be undone.
           </p>
         </Modal>
       )}
@@ -143,12 +129,11 @@ interface ServiceCardProps {
 function ServiceCard({ service, onChanged, onEdit, onDelete }: ServiceCardProps) {
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<VendorTestResult | null>(null);
-  const [newKey, setNewKey] = useState('');
   const [busy, setBusy] = useState(false);
   const toast = useToast();
 
   const { stats } = service;
-  const complete = service.credentials.length > 0 && service.models.length > 0;
+  const complete = service.masked_key !== '' && service.models.length > 0;
 
   const runTest = async () => {
     setTesting(true);
@@ -174,34 +159,6 @@ function ServiceCard({ service, onChanged, onEdit, onDelete }: ServiceCardProps)
       onChanged();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Update failed.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const addKey = async () => {
-    const key = newKey.trim();
-    if (!key) return;
-    setBusy(true);
-    try {
-      await api.addCredential(service.id, key);
-      setNewKey('');
-      onChanged();
-      toast.success('Key added.');
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Add key failed.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const removeKey = async (cid: string) => {
-    setBusy(true);
-    try {
-      await api.deleteCredential(service.id, cid);
-      onChanged();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Remove key failed.');
     } finally {
       setBusy(false);
     }
@@ -304,42 +261,18 @@ function ServiceCard({ service, onChanged, onEdit, onDelete }: ServiceCardProps)
             )}
           </div>
 
-          <span className={styles.sectionTitle}>Credentials (key pool)</span>
+          <span className={styles.sectionTitle}>API key</span>
           <div className={styles.creds}>
-            {service.credentials.length === 0 ? (
+            {service.masked_key === '' ? (
               <span className="muted" style={{ fontSize: 12 }}>
-                No keys — add one to start routing.
+                No key — edit the service and paste one to start routing.
               </span>
             ) : (
-              service.credentials.map((c) => (
-                <span key={c.id} className={styles.cred}>
-                  {c.masked_key}
-                  <button
-                    className={styles.credRemove}
-                    aria-label="Remove key"
-                    disabled={busy}
-                    onClick={() => removeKey(c.id)}
-                  >
-                    <XCircle size={13} />
-                  </button>
-                </span>
-              ))
+              <span className={styles.cred}>
+                <KeyRound size={12} />
+                {service.masked_key}
+              </span>
             )}
-          </div>
-          <div className={styles.addKey}>
-            <input
-              className="input mono"
-              type="password"
-              value={newKey}
-              placeholder="Add API key to pool…"
-              onChange={(e) => setNewKey(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') addKey();
-              }}
-            />
-            <button className="btn btn-sm" onClick={addKey} disabled={busy || !newKey.trim()}>
-              <Plus size={13} /> Add
-            </button>
           </div>
         </div>
 

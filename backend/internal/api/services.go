@@ -23,42 +23,32 @@ type serviceModelView struct {
 	Unit        string  `json:"unit"`
 }
 
-type serviceCredentialView struct {
-	ID        string `json:"id"`
-	MaskedKey string `json:"masked_key"`
-	CreatedAt string `json:"created_at"`
-}
-
-// serviceView is the JSON representation of a configured service. API keys are
-// never serialized in the clear — only masked previews.
+// serviceView is the JSON representation of a configured service. The API key
+// is never serialized in the clear — only a masked preview.
 type serviceView struct {
-	ID             string                  `json:"id"`
-	Name           string                  `json:"name"`
-	Vendor         string                  `json:"vendor"`
-	Adapter        string                  `json:"adapter"`
-	BaseURL        string                  `json:"base_url"`
-	Priority       int                     `json:"priority"`
-	Weight         int                     `json:"weight"`
-	Enabled        bool                    `json:"enabled"`
-	CatalogID      string                  `json:"catalog_id"`
-	Wires          []string                `json:"wires"`
-	AllowUnmatched bool                    `json:"allow_unmatched"`
-	Quirks         map[string]string       `json:"quirks"`
-	Credentials    []serviceCredentialView `json:"credentials"`
-	Models         []serviceModelView      `json:"models"`
-	CreatedAt      string                  `json:"created_at"`
-	UpdatedAt      string                  `json:"updated_at"`
-	Stats          vendorStatsView         `json:"stats"`
+	ID             string             `json:"id"`
+	Name           string             `json:"name"`
+	Vendor         string             `json:"vendor"`
+	Adapter        string             `json:"adapter"`
+	BaseURL        string             `json:"base_url"`
+	Priority       int                `json:"priority"`
+	Weight         int                `json:"weight"`
+	Enabled        bool               `json:"enabled"`
+	CatalogID      string             `json:"catalog_id"`
+	Wires          []string           `json:"wires"`
+	AllowUnmatched bool               `json:"allow_unmatched"`
+	Quirks         map[string]string  `json:"quirks"`
+	MaskedKey      string             `json:"masked_key"`
+	Models         []serviceModelView `json:"models"`
+	CreatedAt      string             `json:"created_at"`
+	UpdatedAt      string             `json:"updated_at"`
+	Stats          vendorStatsView    `json:"stats"`
 }
 
 func newServiceView(svc store.Service, stat store.VendorStat, hasStat bool) serviceView {
-	creds := make([]serviceCredentialView, 0, len(svc.Credentials))
-	for _, c := range svc.Credentials {
-		creds = append(creds, serviceCredentialView{
-			ID:        c.ID,
-			MaskedKey: maskKey(c.APIKey),
-			CreatedAt: c.CreatedAt.UTC().Format(time.RFC3339),
-		})
+	masked := ""
+	if svc.APIKey != "" {
+		masked = maskKey(svc.APIKey)
 	}
 	models := make([]serviceModelView, 0, len(svc.Models))
 	for _, m := range svc.Models {
@@ -90,7 +80,7 @@ func newServiceView(svc store.Service, stat store.VendorStat, hasStat bool) serv
 		Wires:          svc.Wires,
 		AllowUnmatched: svc.AllowUnmatched,
 		Quirks:         svc.Quirks,
-		Credentials:    creds,
+		MaskedKey:      masked,
 		Models:         models,
 		CreatedAt:      svc.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:      svc.UpdatedAt.UTC().Format(time.RFC3339),
@@ -119,7 +109,7 @@ type createServiceReq struct {
 	CatalogID      string            `json:"catalog_id"`
 	AllowUnmatched bool              `json:"allow_unmatched"`
 	Quirks         map[string]string `json:"quirks"`
-	APIKeys        []string          `json:"api_keys"`
+	APIKey         string            `json:"api_key"`
 	Models         []serviceModelReq `json:"models"`
 	Wires          []string          `json:"wires"`
 }
@@ -133,9 +123,11 @@ type patchServiceReq struct {
 	Weight         *int               `json:"weight"`
 	Enabled        *bool              `json:"enabled"`
 	AllowUnmatched *bool              `json:"allow_unmatched"`
-	Quirks         *map[string]string `json:"quirks"`
-	Models         *[]serviceModelReq `json:"models"`
-	Wires          *[]string          `json:"wires"`
+	// APIKey replaces the service's key when present and non-empty.
+	APIKey *string            `json:"api_key"`
+	Quirks *map[string]string `json:"quirks"`
+	Models *[]serviceModelReq `json:"models"`
+	Wires  *[]string          `json:"wires"`
 }
 
 // --- handlers ---
@@ -194,12 +186,6 @@ func (a *api) handleCreateService(w http.ResponseWriter, r *http.Request) {
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
-	keys := make([]string, 0, len(req.APIKeys))
-	for _, k := range req.APIKeys {
-		if strings.TrimSpace(k) != "" {
-			keys = append(keys, k)
-		}
-	}
 
 	// Wires default by adapter when omitted, so plain creates (old UI, curl)
 	// never produce a service that denies all traffic.
@@ -219,7 +205,7 @@ func (a *api) handleCreateService(w http.ResponseWriter, r *http.Request) {
 		CatalogID:      req.CatalogID,
 		AllowUnmatched: req.AllowUnmatched,
 		Quirks:         req.Quirks,
-		APIKeys:        keys,
+		APIKey:         strings.TrimSpace(req.APIKey),
 		Models:         toStoreModels(req.Models),
 		Wires:          wires,
 	})
@@ -248,6 +234,14 @@ func (a *api) handlePatchService(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if req.APIKey != nil {
+		trimmed := strings.TrimSpace(*req.APIKey)
+		if trimmed == "" {
+			writeError(w, http.StatusBadRequest, "bad_request", "api_key cannot be empty")
+			return
+		}
+		req.APIKey = &trimmed
+	}
 	upd := store.ServiceUpdate{
 		Name:           req.Name,
 		Vendor:         req.Vendor,
@@ -257,6 +251,7 @@ func (a *api) handlePatchService(w http.ResponseWriter, r *http.Request) {
 		Weight:         req.Weight,
 		Enabled:        req.Enabled,
 		AllowUnmatched: req.AllowUnmatched,
+		APIKey:         req.APIKey,
 		Quirks:         req.Quirks,
 	}
 	if req.Models != nil {
@@ -303,54 +298,8 @@ func (a *api) handleDeleteService(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-type addCredentialReq struct {
-	APIKey string `json:"api_key"`
-}
-
-// handleAddCredential appends a key to a service's pool and reloads the config.
-func (a *api) handleAddCredential(w http.ResponseWriter, r *http.Request) {
-	var req addCredentialReq
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
-		return
-	}
-	if strings.TrimSpace(req.APIKey) == "" {
-		writeError(w, http.StatusBadRequest, "bad_request", "api_key is required")
-		return
-	}
-	cred, err := a.store.AddCredential(r.PathValue("id"), req.APIKey)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "service not found")
-			return
-		}
-		a.serverError(w, "add credential", err)
-		return
-	}
-	a.reloadAfterWrite()
-	writeJSON(w, http.StatusCreated, serviceCredentialView{
-		ID:        cred.ID,
-		MaskedKey: maskKey(cred.APIKey),
-		CreatedAt: cred.CreatedAt.UTC().Format(time.RFC3339),
-	})
-}
-
-// handleDeleteCredential removes one key from a service's pool.
-func (a *api) handleDeleteCredential(w http.ResponseWriter, r *http.Request) {
-	if err := a.store.DeleteCredential(r.PathValue("id"), r.PathValue("cid")); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "credential not found")
-			return
-		}
-		a.serverError(w, "delete credential", err)
-		return
-	}
-	a.reloadAfterWrite()
-	w.WriteHeader(http.StatusNoContent)
-}
-
 // handleTestService probes a configured service's host origin for reachability,
-// authenticating with its first credential.
+// authenticating with its API key.
 func (a *api) handleTestService(w http.ResponseWriter, r *http.Request) {
 	svc, err := a.store.GetService(r.PathValue("id"))
 	if err != nil {
@@ -375,8 +324,8 @@ func (a *api) handleTestService(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, testVendorView{Reachable: false, Error: err.Error()})
 		return
 	}
-	if len(svc.Credentials) > 0 && svc.Credentials[0].APIKey != "" {
-		applyTestAuth(req, svc.Adapter, svc.Credentials[0].APIKey)
+	if svc.APIKey != "" {
+		applyTestAuth(req, svc.Adapter, svc.APIKey)
 	}
 
 	start := a.now()

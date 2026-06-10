@@ -9,10 +9,12 @@ import (
 )
 
 // Service is one configured upstream: an adapter speaking a wire protocol, a
-// base URL, a credential pool (号池) rotated for rate-limit spreading, and the
-// models it serves with their per-model prices. It is the SQLite-backed
-// successor to the file-based vendor config; the config manager projects each
-// enabled, complete service into a config.Vendor for routing.
+// base URL, a single API key, and the models it serves with their per-model
+// prices. It is the SQLite-backed successor to the file-based vendor config;
+// the config manager projects each enabled, complete service into a
+// config.Vendor for routing. The key is stored plaintext at rest (it must be
+// replayed upstream, so it cannot be hashed); it is never serialized to the
+// API in the clear, only masked.
 type Service struct {
 	ID        string
 	Name      string
@@ -23,24 +25,15 @@ type Service struct {
 	Weight    int
 	Enabled   bool
 	CatalogID string // provenance: which catalog preset this came from, if any
+	APIKey    string
 	// AllowUnmatched forwards requests whose path matches no enabled wire
 	// (metered zero, confidence unknown) instead of denying them.
 	AllowUnmatched bool
 	Quirks         map[string]string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
-	Credentials    []ServiceCredential
 	Models         []ServiceModel
 	Wires          []string
-}
-
-// ServiceCredential is one API key in a service's pool. The key is stored
-// plaintext at rest (it must be replayed upstream, so it cannot be hashed); it
-// is never serialized to the API in the clear, only masked.
-type ServiceCredential struct {
-	ID        string
-	APIKey    string
-	CreatedAt time.Time
 }
 
 // ServiceModel is a model a service serves, with its true per-model price.
@@ -54,8 +47,7 @@ type ServiceModel struct {
 	Unit        string
 }
 
-// NewService describes a service to create. Credentials carry plaintext keys;
-// ids are generated.
+// NewService describes a service to create. APIKey carries the plaintext key.
 type NewService struct {
 	Name           string
 	Vendor         string
@@ -67,14 +59,13 @@ type NewService struct {
 	CatalogID      string
 	AllowUnmatched bool
 	Quirks         map[string]string
-	APIKeys        []string
+	APIKey         string
 	Models         []ServiceModel
 	Wires          []string
 }
 
 // ServiceUpdate carries optional scalar updates; nil pointers leave a field
 // unchanged. When Models or Wires is non-nil it fully replaces that set.
-// Credentials are managed via AddCredential/DeleteCredential, not here.
 type ServiceUpdate struct {
 	Name           *string
 	Vendor         *string
@@ -84,6 +75,7 @@ type ServiceUpdate struct {
 	Weight         *int
 	Enabled        *bool
 	AllowUnmatched *bool
+	APIKey         *string
 	Quirks         *map[string]string
 	Models         []ServiceModel
 	Wires          []string
@@ -106,11 +98,10 @@ func (s *Store) CountServices() (int, error) {
 	return n, nil
 }
 
-// ListServices returns all services, newest first, each with its credentials
-// and models assembled. It uses three bulk queries rather than per-service
-// follow-ups.
+// ListServices returns all services, newest first, each with its models and
+// wires assembled. It uses bulk queries rather than per-service follow-ups.
 func (s *Store) ListServices() ([]Service, error) {
-	rows, err := s.db.Query(`SELECT id, name, vendor, adapter, base_url, priority, weight, enabled, catalog_id, allow_unmatched, quirks, created_at, updated_at
+	rows, err := s.db.Query(`SELECT id, name, vendor, adapter, base_url, priority, weight, enabled, catalog_id, api_key, allow_unmatched, quirks, created_at, updated_at
 		FROM services ORDER BY created_at DESC, id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list services: %w", err)
@@ -132,29 +123,6 @@ func (s *Store) ListServices() ([]Service, error) {
 	}
 	if len(svcs) == 0 {
 		return nil, nil
-	}
-
-	credRows, err := s.db.Query(`SELECT id, service_id, api_key, created_at FROM service_credentials ORDER BY created_at, id`)
-	if err != nil {
-		return nil, fmt.Errorf("store: list credentials: %w", err)
-	}
-	defer credRows.Close()
-	for credRows.Next() {
-		var (
-			c   ServiceCredential
-			sid string
-			ts  int64
-		)
-		if err := credRows.Scan(&c.ID, &sid, &c.APIKey, &ts); err != nil {
-			return nil, fmt.Errorf("store: scan credential: %w", err)
-		}
-		c.CreatedAt = time.Unix(ts, 0)
-		if i, ok := index[sid]; ok {
-			svcs[i].Credentials = append(svcs[i].Credentials, c)
-		}
-	}
-	if err := credRows.Err(); err != nil {
-		return nil, fmt.Errorf("store: list credentials: %w", err)
 	}
 
 	modelRows, err := s.db.Query(`SELECT service_id, model, input, output, cached_input, unit FROM service_models ORDER BY model`)
@@ -199,9 +167,9 @@ func (s *Store) ListServices() ([]Service, error) {
 	return svcs, nil
 }
 
-// GetService returns one service with its credentials and models.
+// GetService returns one service with its models and wires.
 func (s *Store) GetService(id string) (Service, error) {
-	row := s.db.QueryRow(`SELECT id, name, vendor, adapter, base_url, priority, weight, enabled, catalog_id, allow_unmatched, quirks, created_at, updated_at
+	row := s.db.QueryRow(`SELECT id, name, vendor, adapter, base_url, priority, weight, enabled, catalog_id, api_key, allow_unmatched, quirks, created_at, updated_at
 		FROM services WHERE id = ?`, id)
 	svc, err := scanService(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -209,26 +177,6 @@ func (s *Store) GetService(id string) (Service, error) {
 	}
 	if err != nil {
 		return Service{}, fmt.Errorf("store: get service: %w", err)
-	}
-
-	credRows, err := s.db.Query(`SELECT id, api_key, created_at FROM service_credentials WHERE service_id = ? ORDER BY created_at, id`, id)
-	if err != nil {
-		return Service{}, fmt.Errorf("store: get credentials: %w", err)
-	}
-	defer credRows.Close()
-	for credRows.Next() {
-		var (
-			c  ServiceCredential
-			ts int64
-		)
-		if err := credRows.Scan(&c.ID, &c.APIKey, &ts); err != nil {
-			return Service{}, fmt.Errorf("store: scan credential: %w", err)
-		}
-		c.CreatedAt = time.Unix(ts, 0)
-		svc.Credentials = append(svc.Credentials, c)
-	}
-	if err := credRows.Err(); err != nil {
-		return Service{}, fmt.Errorf("store: get credentials: %w", err)
 	}
 
 	modelRows, err := s.db.Query(`SELECT model, input, output, cached_input, unit FROM service_models WHERE service_id = ? ORDER BY model`, id)
@@ -277,7 +225,7 @@ func scanService(sc interface{ Scan(...any) error }) (Service, error) {
 		updatedAt      int64
 	)
 	if err := sc.Scan(&svc.ID, &svc.Name, &svc.Vendor, &svc.Adapter, &svc.BaseURL,
-		&svc.Priority, &svc.Weight, &enabled, &svc.CatalogID, &allowUnmatched, &quirks, &createdAt, &updatedAt); err != nil {
+		&svc.Priority, &svc.Weight, &enabled, &svc.CatalogID, &svc.APIKey, &allowUnmatched, &quirks, &createdAt, &updatedAt); err != nil {
 		return Service{}, err
 	}
 	svc.Enabled = enabled != 0
@@ -292,8 +240,8 @@ func scanService(sc interface{ Scan(...any) error }) (Service, error) {
 	return svc, nil
 }
 
-// CreateService inserts a service plus its credentials and models in one
-// transaction and returns the assembled row.
+// CreateService inserts a service plus its models and wires in one transaction
+// and returns the assembled row.
 func (s *Store) CreateService(ns NewService) (Service, error) {
 	id, err := randID()
 	if err != nil {
@@ -319,25 +267,11 @@ func (s *Store) CreateService(ns NewService) (Service, error) {
 	}
 	defer tx.Rollback()
 
-	_, err = tx.Exec(`INSERT INTO services (id, name, vendor, adapter, base_url, priority, weight, enabled, catalog_id, allow_unmatched, quirks, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, ns.Name, ns.Vendor, adapter, ns.BaseURL, ns.Priority, weight, boolToInt(ns.Enabled), ns.CatalogID, boolToInt(ns.AllowUnmatched), quirks, now.Unix(), now.Unix())
+	_, err = tx.Exec(`INSERT INTO services (id, name, vendor, adapter, base_url, priority, weight, enabled, catalog_id, api_key, allow_unmatched, quirks, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, ns.Name, ns.Vendor, adapter, ns.BaseURL, ns.Priority, weight, boolToInt(ns.Enabled), ns.CatalogID, ns.APIKey, boolToInt(ns.AllowUnmatched), quirks, now.Unix(), now.Unix())
 	if err != nil {
 		return Service{}, fmt.Errorf("store: insert service: %w", err)
-	}
-
-	for _, key := range ns.APIKeys {
-		if key == "" {
-			continue
-		}
-		cid, err := randID()
-		if err != nil {
-			return Service{}, err
-		}
-		if _, err := tx.Exec(`INSERT INTO service_credentials (id, service_id, api_key, created_at) VALUES (?, ?, ?, ?)`,
-			cid, id, key, now.Unix()); err != nil {
-			return Service{}, fmt.Errorf("store: insert credential: %w", err)
-		}
 	}
 
 	if err := insertModels(tx, id, ns.Models); err != nil {
@@ -354,8 +288,8 @@ func (s *Store) CreateService(ns NewService) (Service, error) {
 	return s.GetService(id)
 }
 
-// UpdateService applies the non-nil scalar fields and, when Models is non-nil,
-// replaces the model set. It returns the updated service.
+// UpdateService applies the non-nil scalar fields and, when Models or Wires is
+// non-nil, replaces that set. It returns the updated service.
 func (s *Store) UpdateService(id string, upd ServiceUpdate) (Service, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -402,6 +336,10 @@ func (s *Store) UpdateService(id string, upd ServiceUpdate) (Service, error) {
 	if upd.AllowUnmatched != nil {
 		sets = append(sets, "allow_unmatched = ?")
 		args = append(args, boolToInt(*upd.AllowUnmatched))
+	}
+	if upd.APIKey != nil {
+		sets = append(sets, "api_key = ?")
+		args = append(args, *upd.APIKey)
 	}
 	if upd.Quirks != nil {
 		quirks, err := encodeQuirks(*upd.Quirks)
@@ -455,7 +393,7 @@ func (s *Store) UpdateService(id string, upd ServiceUpdate) (Service, error) {
 	return s.GetService(id)
 }
 
-// DeleteService removes a service; its credentials and models cascade.
+// DeleteService removes a service; its models and wires cascade.
 func (s *Store) DeleteService(id string) error {
 	res, err := s.db.Exec(`DELETE FROM services WHERE id = ?`, id)
 	if err != nil {
@@ -463,35 +401,6 @@ func (s *Store) DeleteService(id string) error {
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return fmt.Errorf("store: service %q: %w", id, ErrNotFound)
-	}
-	return nil
-}
-
-// AddCredential appends a plaintext key to a service's pool and returns it.
-func (s *Store) AddCredential(serviceID, apiKey string) (ServiceCredential, error) {
-	if _, err := s.GetService(serviceID); err != nil {
-		return ServiceCredential{}, err
-	}
-	cid, err := randID()
-	if err != nil {
-		return ServiceCredential{}, err
-	}
-	now := time.Now()
-	if _, err := s.db.Exec(`INSERT INTO service_credentials (id, service_id, api_key, created_at) VALUES (?, ?, ?, ?)`,
-		cid, serviceID, apiKey, now.Unix()); err != nil {
-		return ServiceCredential{}, fmt.Errorf("store: add credential: %w", err)
-	}
-	return ServiceCredential{ID: cid, APIKey: apiKey, CreatedAt: now}, nil
-}
-
-// DeleteCredential removes one key from a service's pool.
-func (s *Store) DeleteCredential(serviceID, credID string) error {
-	res, err := s.db.Exec(`DELETE FROM service_credentials WHERE id = ? AND service_id = ?`, credID, serviceID)
-	if err != nil {
-		return fmt.Errorf("store: delete credential: %w", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("store: credential %q: %w", credID, ErrNotFound)
 	}
 	return nil
 }

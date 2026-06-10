@@ -228,9 +228,7 @@ vendors:
     served_models: [gpt-4o]
     priority: 1
     wires: [openai/chat, openai/completions, openai/embeddings, openai/models]
-    credentials:
-      - id: credA
-        api_key: vendor-secret-key
+    credential: {id: credA, api_key: vendor-secret-key}
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
 `, mock.URL)
@@ -293,9 +291,7 @@ vendors:
     served_models: [text-embedding-3-small]
     priority: 1
     wires: [openai/embeddings, openai/models]
-    credentials:
-      - id: credE
-        api_key: emb-key
+    credential: {id: credE, api_key: emb-key}
     prices:
       text-embedding-3-small: { input: 0.02, unit: per_1m_tokens }
 `, mock.URL)
@@ -389,9 +385,7 @@ vendors:
     served_models: [gpt-4o]
     priority: 1
     wires: [openai/chat]
-    credentials:
-      - id: credA
-        api_key: k
+    credential: {id: credA, api_key: k}
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
 `, mock.URL)
@@ -459,9 +453,7 @@ vendors:
     served_models: [gpt-4o]
     priority: 1
     wires: [openai/chat]
-    credentials:
-      - id: credA
-        api_key: keyA
+    credential: {id: credA, api_key: keyA}
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
   - name: vendorB
@@ -469,9 +461,7 @@ vendors:
     served_models: [gpt-4o]
     priority: 2
     wires: [openai/chat]
-    credentials:
-      - id: credB
-        api_key: keyB
+    credential: {id: credB, api_key: keyB}
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
 `, mockA.URL, mockB.URL)
@@ -578,9 +568,7 @@ vendors:
     served_models: [gpt-4o]
     priority: 1
     wires: [openai/chat]
-    credentials:
-      - id: credA
-        api_key: k
+    credential: {id: credA, api_key: k}
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
 `, mock.URL)
@@ -642,9 +630,7 @@ vendors:
     served_models: [gpt-4o]
     priority: 1
     wires: [openai/chat, openai/completions, openai/embeddings, openai/models]
-    credentials:
-      - id: %s
-        api_key: %s
+    credential: {id: %s, api_key: %s}
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
 `, vendor, baseURL, credID, apiKey)
@@ -762,9 +748,7 @@ vendors:
     served_models: [doubao-pro-32k]
     priority: 1
     wires: [openai/chat]
-    credentials:
-      - id: arkKey
-        api_key: ark-secret
+    credential: {id: arkKey, api_key: ark-secret}
     prices:
       doubao-pro-32k: { input: 2.50, output: 10.00, unit: per_1m_tokens }
 `, mock.URL)
@@ -827,9 +811,7 @@ vendors:
     priority: 1
     wires: [openai/chat]
     allow_unmatched: true
-    credentials:
-      - id: %s-key
-        api_key: %s-secret
+    credential: {id: %s-key, api_key: %s-secret}
     prices:
       qwen-plus: { input: 0.40, output: 1.20, unit: per_1m_tokens }
 `, vendor, baseURL, vendor, vendor)
@@ -969,20 +951,17 @@ func TestPassthroughScope(t *testing.T) {
 	}
 }
 
-// --- Test 16: Mode B fails over across the vendor's own credentials ---
+// --- Test 16: Mode B is a single attempt (one key per service, no retry) ---
 
-func TestPassthroughCredentialRetry(t *testing.T) {
-	// The mock 500s on the first credential and 200s on the second, identifying
-	// the credential by the swapped Authorization header.
+func TestPassthroughSingleAttempt(t *testing.T) {
+	// The mock 500s; with one credential per service the passthrough must
+	// surface that error to the client rather than retrying.
 	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") == "Bearer key1" {
-			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = io.WriteString(w, `{"error":"down"}`)
-			return
+		if r.Header.Get("Authorization") != "Bearer key1" {
+			t.Errorf("Authorization = %q, want Bearer key1", r.Header.Get("Authorization"))
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, `{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`)
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, `{"error":"down"}`)
 	}))
 	defer mock.Close()
 
@@ -994,11 +973,7 @@ vendors:
     priority: 1
     wires: [openai/chat]
     allow_unmatched: true
-    credentials:
-      - id: c1
-        api_key: key1
-      - id: c2
-        api_key: key2
+    credential: {id: c1, api_key: key1}
     prices:
       qwen-plus: { input: 0.40, output: 1.20, unit: per_1m_tokens }
 `, mock.URL)
@@ -1009,28 +984,16 @@ vendors:
 
 	resp := env.post(t, "/x/bailian/api/v1/services/x/generation", key, `{"model":"qwen-plus"}`)
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (retry on 2nd credential)", resp.StatusCode)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (single attempt, no retry)", resp.StatusCode)
 	}
 
 	rows := env.callRows(t)
-	if len(rows) != 2 {
-		t.Fatalf("call rows = %d, want 2 (one per credential attempt)", len(rows))
+	if len(rows) != 1 {
+		t.Fatalf("call rows = %d, want 1 (exactly one attempt)", len(rows))
 	}
-	var got500, got200 bool
-	for _, r := range rows {
-		if r.Vendor != "bailian" {
-			t.Errorf("row vendor = %q, want bailian (no cross-vendor failover)", r.Vendor)
-		}
-		switch r.Status {
-		case 500:
-			got500 = true
-		case 200:
-			got200 = true
-		}
-	}
-	if !got500 || !got200 {
-		t.Errorf("expected one 500 row and one 200 row, got %+v", rows)
+	if rows[0].Vendor != "bailian" || rows[0].Status != 500 {
+		t.Errorf("row = %+v, want bailian/500", rows[0])
 	}
 }
 
@@ -1048,9 +1011,7 @@ vendors:
     served_models: [gpt-4o]
     priority: 1
     wires: [openai/embeddings]
-    credentials:
-      - id: credA
-        api_key: k
+    credential: {id: credA, api_key: k}
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
 `, mock.URL)
@@ -1096,9 +1057,7 @@ vendors:
     served_models: [qwen-plus]
     priority: 1
     wires: [openai/chat]
-    credentials:
-      - id: c1
-        api_key: key1
+    credential: {id: c1, api_key: key1}
     prices:
       qwen-plus: { input: 0.40, output: 1.20, unit: per_1m_tokens }
 `, mock.URL)
@@ -1175,9 +1134,7 @@ vendors:
     served_models: [claude-x]
     priority: 1
     wires: [anthropic/messages, anthropic/models]
-    credentials:
-      - id: credAn
-        api_key: anthro-key
+    credential: {id: credAn, api_key: anthro-key}
     prices:
       claude-x: { input: 3.0, output: 15.0, cached_input: 0.3, unit: per_1m_tokens }
 `, baseURL)
@@ -1239,9 +1196,7 @@ vendors:
     priority: 1
     wires: [openai/chat]
     quirks: { cache_tokens: deepseek }
-    credentials:
-      - id: credD
-        api_key: ds-key
+    credential: {id: credD, api_key: ds-key}
     prices:
       deepseek-v4-flash: { input: 0.14, output: 0.28, cached_input: 0.0028, unit: per_1m_tokens }
 `, mock.URL)
@@ -1281,9 +1236,7 @@ vendors:
     priority: 1
     wires: [openai/chat]
     quirks: { inject_stream_usage: "true" }
-    credentials:
-      - id: credA
-        api_key: k
+    credential: {id: credA, api_key: k}
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
 `, mock.URL)

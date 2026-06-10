@@ -492,8 +492,8 @@ func (a *api) handleTestVendor(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, testVendorView{Reachable: false, Error: err.Error()})
 		return
 	}
-	if len(v.Credentials) > 0 && v.Credentials[0].APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+v.Credentials[0].APIKey)
+	if v.Credential.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+v.Credential.APIKey)
 	}
 
 	start := a.now()

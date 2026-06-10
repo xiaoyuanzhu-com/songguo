@@ -1,23 +1,26 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { BookOpen, Check, Plus, Search } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ArrowLeft, Check, Plus, Search, Wrench } from 'lucide-react';
 import { api } from '../api/client';
 import type { CatalogService, CatalogVendor } from '../api/types';
-import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
+import { EmptyState } from '../components/EmptyState';
 import { Page } from '../components/Layout';
 import { ServiceForm, type ServicePrefill } from '../components/ServiceForm';
 import { Skeleton } from '../components/Skeleton';
 import { useToast } from '../components/Toast';
 import { useFetch } from '../lib/useFetch';
-import styles from './Catalog.module.css';
+import styles from './ServiceNew.module.css';
 
 interface FlatEntry {
   vendor: CatalogVendor;
   service: CatalogService;
 }
 
-export function CatalogPage() {
+/** Marker for "open the form without a preset". */
+const CUSTOM: ServicePrefill = {};
+
+export function ServiceNewPage() {
   const catalog = useFetch(() => api.catalog(), []);
   const services = useFetch(() => api.services(), []);
   const [query, setQuery] = useState('');
@@ -72,11 +75,17 @@ export function CatalogPage() {
   };
 
   return (
-    <Page title="Catalog">
+    <Page
+      title="New service"
+      actions={
+        <Link to="/services" className="btn">
+          <ArrowLeft size={15} /> Back to services
+        </Link>
+      }
+    >
       <div className={styles.intro}>
-        <BookOpen size={15} />
-        Browse known providers and add one in a click — we pre-fill the endpoint, models, and
-        prices; you just paste your API key.
+        Pick a preset — endpoint, wires, models, and prices come pre-filled, you just paste your
+        API key — or configure a custom service from scratch.
       </div>
 
       {catalog.error ? (
@@ -98,7 +107,7 @@ export function CatalogPage() {
               <input
                 className={styles.searchInput}
                 value={query}
-                placeholder="Search services, models, providers…"
+                placeholder="Search presets, models, providers…"
                 onChange={(e) => setQuery(e.target.value)}
               />
             </div>
@@ -121,12 +130,22 @@ export function CatalogPage() {
             </div>
           </div>
 
-          {filtered.length === 0 ? (
+          {filtered.length === 0 && query.trim() !== '' ? (
             <EmptyState icon={Search} title="No matches" hint="Try a different search or facet." />
           ) : (
             <div className={styles.grid}>
+              <button className={`card ${styles.entry} ${styles.custom}`} onClick={() => setPrefill(CUSTOM)}>
+                <div className={styles.customIcon}>
+                  <Wrench size={18} />
+                </div>
+                <span className={styles.serviceName}>Custom service</span>
+                <span className={styles.note}>
+                  Any OpenAI- or Anthropic-compatible endpoint: set the base URL, key, wires, and
+                  per-model prices yourself.
+                </span>
+              </button>
               {filtered.map(({ vendor, service }) => (
-                <CatalogCard
+                <PresetCard
                   key={`${vendor.id}/${service.id}`}
                   vendor={vendor}
                   service={service}
@@ -145,7 +164,6 @@ export function CatalogPage() {
           onClose={() => setPrefill(null)}
           onSaved={() => {
             setPrefill(null);
-            services.refetch();
             toast.success('Service added.');
             navigate('/services');
           }}
@@ -155,14 +173,14 @@ export function CatalogPage() {
   );
 }
 
-interface CatalogCardProps {
+interface PresetCardProps {
   vendor: CatalogVendor;
   service: CatalogService;
   added: boolean;
   onAdd: () => void;
 }
 
-function CatalogCard({ vendor, service, added, onAdd }: CatalogCardProps) {
+function PresetCard({ vendor, service, added, onAdd }: PresetCardProps) {
   const shown = service.models.slice(0, 4);
   return (
     <div className={`card ${styles.entry}`}>

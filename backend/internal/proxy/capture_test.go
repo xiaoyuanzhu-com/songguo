@@ -26,9 +26,7 @@ vendors:
     served_models: [gpt-4o]
     priority: 1
     wires: [openai/chat]
-    credentials:
-      - id: credA
-        api_key: vendor-secret-key
+    credential: {id: credA, api_key: vendor-secret-key}
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
 `, capture, maxBytes, retain, baseURL)
@@ -189,9 +187,7 @@ vendors:
     served_models: [gpt-4o]
     priority: 1
     wires: [openai/chat]
-    credentials:
-      - id: credA
-        api_key: keyA
+    credential: {id: credA, api_key: keyA}
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
   - name: vendorB
@@ -199,9 +195,7 @@ vendors:
     served_models: [gpt-4o]
     priority: 2
     wires: [openai/chat]
-    credentials:
-      - id: credB
-        api_key: keyB
+    credential: {id: credB, api_key: keyB}
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
 `, mockA.URL, mockB.URL)

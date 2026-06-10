@@ -116,9 +116,7 @@ vendors:
     base_url: %s
     served_models: [realtime-model]
     priority: 1
-    credentials:
-      - id: %s
-        api_key: %s
+    credential: {id: %s, api_key: %s}
     prices:
       realtime-model: { input: 1.0, output: 1.0, unit: per_1m_tokens }
 `, vendor, baseURL, credID, apiKey)

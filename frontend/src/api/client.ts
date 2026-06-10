@@ -10,7 +10,6 @@ import type {
   PatchTokenBody,
   PricingRow,
   Service,
-  ServiceCredential,
   Settings,
   Token,
   UsageSeries,
@@ -180,18 +179,6 @@ export const api = {
 
   deleteService: (id: string) =>
     request<void>(`/services/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-
-  addCredential: (id: string, apiKey: string) =>
-    request<ServiceCredential>(`/services/${encodeURIComponent(id)}/credentials`, {
-      method: 'POST',
-      body: JSON.stringify({ api_key: apiKey }),
-    }),
-
-  deleteCredential: (id: string, cid: string) =>
-    request<void>(
-      `/services/${encodeURIComponent(id)}/credentials/${encodeURIComponent(cid)}`,
-      { method: 'DELETE' },
-    ),
 
   testService: (id: string) =>
     request<VendorTestResult>(`/services/${encodeURIComponent(id)}/test`, {

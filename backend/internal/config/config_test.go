@@ -19,9 +19,7 @@ vendors:
     served_models: [gpt-4o, gpt-4o-mini, text-embedding-3-small]
     priority: 1
     weight: 1
-    credentials:
-      - id: openai-key-1
-        api_key: sk-aaa
+    credential: {id: openai-key-1, api_key: sk-aaa}
     prices:
       gpt-4o:                  { input: 2.50, output: 10.00, unit: per_1m_tokens }
       gpt-4o-mini:            { input: 0.15, output: 0.60,  unit: per_1m_tokens }
@@ -30,9 +28,7 @@ vendors:
     base_url: https://api.deepseek.com
     served_models: [deepseek-chat, gpt-4o]
     priority: 2
-    credentials:
-      - id: deepseek-key-1
-        api_key: sk-bbb
+    credential: {id: deepseek-key-1, api_key: sk-bbb}
     prices:
       deepseek-chat: { input: 0.27, output: 1.10, unit: per_1m_tokens }
 `
@@ -104,7 +100,6 @@ func TestSnapshotReturnsCopies(t *testing.T) {
 	v, _ := snap.Vendor("openai-main")
 	v.ServedModels[0] = "mutated"
 	v.Prices["gpt-4o"] = Price{Input: 999}
-	v.Credentials[0].APIKey = "leaked"
 
 	again, _ := snap.Vendor("openai-main")
 	if again.ServedModels[0] == "mutated" {
@@ -112,9 +107,6 @@ func TestSnapshotReturnsCopies(t *testing.T) {
 	}
 	if again.Prices["gpt-4o"].Input == 999 {
 		t.Error("mutating returned Prices leaked into snapshot")
-	}
-	if again.Credentials[0].APIKey == "leaked" {
-		t.Error("mutating returned Credentials leaked into snapshot")
 	}
 }
 
@@ -137,17 +129,17 @@ vendors:
   - name: a
     base_url: https://a.example.com
     served_models: [m1]
-    credentials: [{id: ka, api_key: k}]
+    credential: {id: ka, api_key: k}
   - name: b
     base_url: https://b.example.com
     served_models: [m2]
     weight: 5
-    credentials: [{id: kb, api_key: k}]
+    credential: {id: kb, api_key: k}
   - name: c
     base_url: https://c.example.com
     served_models: [m3]
     weight: -3
-    credentials: [{id: kc, api_key: k}]
+    credential: {id: kc, api_key: k}
 `
 	snap, err := Parse([]byte(y))
 	if err != nil {
@@ -172,8 +164,8 @@ func TestValidationFailures(t *testing.T) {
 			name: "duplicate vendor name",
 			yaml: `
 vendors:
-  - {name: dup, base_url: https://a.example.com, served_models: [m1], credentials: [{id: k1, api_key: k}]}
-  - {name: dup, base_url: https://b.example.com, served_models: [m2], credentials: [{id: k2, api_key: k}]}
+  - {name: dup, base_url: https://a.example.com, served_models: [m1], credential: {id: k1, api_key: k}}
+  - {name: dup, base_url: https://b.example.com, served_models: [m2], credential: {id: k2, api_key: k}}
 `,
 			wantSubs: []string{"duplicate vendor name"},
 		},
@@ -181,7 +173,7 @@ vendors:
 			name: "missing base_url",
 			yaml: `
 vendors:
-  - {name: a, served_models: [m1], credentials: [{id: k1, api_key: k}]}
+  - {name: a, served_models: [m1], credential: {id: k1, api_key: k}}
 `,
 			wantSubs: []string{"base_url must be non-empty"},
 		},
@@ -189,7 +181,7 @@ vendors:
 			name: "bad base_url scheme",
 			yaml: `
 vendors:
-  - {name: a, base_url: "ftp://x", served_models: [m1], credentials: [{id: k1, api_key: k}]}
+  - {name: a, base_url: "ftp://x", served_models: [m1], credential: {id: k1, api_key: k}}
 `,
 			wantSubs: []string{"absolute http or https"},
 		},
@@ -197,7 +189,7 @@ vendors:
 			name: "relative base_url",
 			yaml: `
 vendors:
-  - {name: a, base_url: "/relative/path", served_models: [m1], credentials: [{id: k1, api_key: k}]}
+  - {name: a, base_url: "/relative/path", served_models: [m1], credential: {id: k1, api_key: k}}
 `,
 			wantSubs: []string{"absolute http or https"},
 		},
@@ -205,7 +197,7 @@ vendors:
 			name: "empty served_models",
 			yaml: `
 vendors:
-  - {name: a, base_url: https://a.example.com, served_models: [], credentials: [{id: k1, api_key: k}]}
+  - {name: a, base_url: https://a.example.com, served_models: [], credential: {id: k1, api_key: k}}
 `,
 			wantSubs: []string{"served_models must be non-empty"},
 		},
@@ -213,42 +205,25 @@ vendors:
 			name: "duplicate model within vendor",
 			yaml: `
 vendors:
-  - {name: a, base_url: https://a.example.com, served_models: [m1, m1], credentials: [{id: k1, api_key: k}]}
+  - {name: a, base_url: https://a.example.com, served_models: [m1, m1], credential: {id: k1, api_key: k}}
 `,
 			wantSubs: []string{"duplicate served model"},
 		},
 		{
-			name: "duplicate credential id across vendors",
+			name: "missing credential",
 			yaml: `
 vendors:
-  - {name: a, base_url: https://a.example.com, served_models: [m1], credentials: [{id: shared, api_key: k}]}
-  - {name: b, base_url: https://b.example.com, served_models: [m2], credentials: [{id: shared, api_key: k}]}
+  - {name: a, base_url: https://a.example.com, served_models: [m1]}
 `,
-			wantSubs: []string{"already used by"},
-		},
-		{
-			name: "empty credentials",
-			yaml: `
-vendors:
-  - {name: a, base_url: https://a.example.com, served_models: [m1], credentials: []}
-`,
-			wantSubs: []string{"credentials must be non-empty"},
+			wantSubs: []string{"credential api_key must be non-empty"},
 		},
 		{
 			name: "missing api_key",
 			yaml: `
 vendors:
-  - {name: a, base_url: https://a.example.com, served_models: [m1], credentials: [{id: k1}]}
+  - {name: a, base_url: https://a.example.com, served_models: [m1], credential: {id: k1}}
 `,
-			wantSubs: []string{"empty api_key"},
-		},
-		{
-			name: "empty credential id",
-			yaml: `
-vendors:
-  - {name: a, base_url: https://a.example.com, served_models: [m1], credentials: [{id: "", api_key: k}]}
-`,
-			wantSubs: []string{"empty id"},
+			wantSubs: []string{"credential api_key must be non-empty"},
 		},
 		{
 			name: "price with empty unit",
@@ -257,7 +232,7 @@ vendors:
   - name: a
     base_url: https://a.example.com
     served_models: [m1]
-    credentials: [{id: k1, api_key: k}]
+    credential: {id: k1, api_key: k}
     prices:
       m1: {input: 1.0, output: 2.0}
 `,
@@ -267,9 +242,9 @@ vendors:
 			name: "aggregates multiple problems",
 			yaml: `
 vendors:
-  - {name: "", served_models: [], credentials: []}
+  - {name: "", served_models: []}
 `,
-			wantSubs: []string{"name must be non-empty", "base_url must be non-empty", "served_models must be non-empty", "credentials must be non-empty"},
+			wantSubs: []string{"name must be non-empty", "base_url must be non-empty", "served_models must be non-empty", "credential api_key must be non-empty"},
 		},
 	}
 
@@ -355,7 +330,7 @@ vendors:
   - name: solo
     base_url: https://solo.example.com
     served_models: [only-model]
-    credentials: [{id: solo-key, api_key: k}]
+    credential: {id: solo-key, api_key: k}
 `
 	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
 		t.Fatal(err)
@@ -392,8 +367,8 @@ func TestManagerKeepsPreviousOnInvalid(t *testing.T) {
 	// Write an invalid config (duplicate vendor names).
 	const bad = `
 vendors:
-  - {name: dup, base_url: https://a.example.com, served_models: [m1], credentials: [{id: k1, api_key: k}]}
-  - {name: dup, base_url: https://b.example.com, served_models: [m2], credentials: [{id: k2, api_key: k}]}
+  - {name: dup, base_url: https://a.example.com, served_models: [m1], credential: {id: k1, api_key: k}}
+  - {name: dup, base_url: https://b.example.com, served_models: [m2], credential: {id: k2, api_key: k}}
 `
 	if err := os.WriteFile(path, []byte(bad), 0o644); err != nil {
 		t.Fatal(err)

@@ -75,6 +75,12 @@ func (s *Store) migrate() error {
 	if err != nil {
 		return err
 	}
+	// service_credentials predates the one-key-per-service model; when present
+	// the oldest key is folded into services.api_key and the table dropped.
+	hadCredPool, err := s.tableExists("service_credentials")
+	if err != nil {
+		return err
+	}
 
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS tokens (
@@ -126,8 +132,8 @@ func (s *Store) migrate() error {
 
 		// Vendor/service config lives in SQLite (managed from the dashboard),
 		// replacing the file-based config.yaml as the source of truth. A service
-		// is one configured upstream: an adapter + base_url + a credential pool
-		// (号池) + the models it serves with their per-model prices.
+		// is one configured upstream: an adapter + base_url + a single API key +
+		// the models it serves with their per-model prices.
 		`CREATE TABLE IF NOT EXISTS services (
 			id          TEXT PRIMARY KEY,
 			name        TEXT NOT NULL UNIQUE,
@@ -138,14 +144,9 @@ func (s *Store) migrate() error {
 			weight      INTEGER NOT NULL DEFAULT 1,
 			enabled     INTEGER NOT NULL DEFAULT 1,
 			catalog_id  TEXT NOT NULL DEFAULT '',
+			api_key     TEXT NOT NULL DEFAULT '',
 			created_at  INTEGER NOT NULL,
 			updated_at  INTEGER NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS service_credentials (
-			id          TEXT PRIMARY KEY,
-			service_id  TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
-			api_key     TEXT NOT NULL,
-			created_at  INTEGER NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS service_models (
 			service_id  TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
@@ -163,7 +164,6 @@ func (s *Store) migrate() error {
 			wire        TEXT NOT NULL,
 			PRIMARY KEY (service_id, wire)
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_service_credentials_service ON service_credentials(service_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_service_models_service ON service_models(service_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_service_wires_service ON service_wires(service_id)`,
 
@@ -190,6 +190,7 @@ func (s *Store) migrate() error {
 		{"calls", "confidence", "TEXT NOT NULL DEFAULT ''"},
 		{"services", "allow_unmatched", "INTEGER NOT NULL DEFAULT 0"},
 		{"services", "quirks", "TEXT NOT NULL DEFAULT '{}'"},
+		{"services", "api_key", "TEXT NOT NULL DEFAULT ''"},
 		{"service_models", "cached_input", "REAL NOT NULL DEFAULT 0"},
 	}
 	for _, a := range adds {
@@ -198,10 +199,33 @@ func (s *Store) migrate() error {
 		}
 	}
 
+	if hadCredPool {
+		if err := s.foldCredentialPool(); err != nil {
+			return err
+		}
+	}
+
 	if !hadWires {
 		if err := s.backfillWires(); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// foldCredentialPool migrates from the multi-key pool era: each service keeps
+// its oldest key as services.api_key (any extra keys are dropped — one key per
+// service by design), then the pool table is removed.
+func (s *Store) foldCredentialPool() error {
+	if _, err := s.db.Exec(`UPDATE services SET api_key = COALESCE(
+			(SELECT sc.api_key FROM service_credentials sc
+			 WHERE sc.service_id = services.id
+			 ORDER BY sc.created_at, sc.id LIMIT 1), '')
+		WHERE api_key = ''`); err != nil {
+		return fmt.Errorf("store: fold credential pool: %w", err)
+	}
+	if _, err := s.db.Exec(`DROP TABLE service_credentials`); err != nil {
+		return fmt.Errorf("store: drop service_credentials: %w", err)
 	}
 	return nil
 }

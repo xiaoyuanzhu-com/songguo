@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { Activity, BookOpen, KeyRound, Lock, LockOpen, Server, Settings } from 'lucide-react';
+import { Activity, KeyRound, Lock, LockOpen, Server, Settings } from 'lucide-react';
 import styles from './Layout.module.css';
 
 interface LayoutContext {
@@ -11,7 +11,6 @@ interface LayoutContext {
 const NAV = [
   { to: '/', label: 'Overview', icon: Activity, end: true },
   { to: '/services', label: 'Services', icon: Server, end: false },
-  { to: '/catalog', label: 'Catalog', icon: BookOpen, end: false },
   { to: '/tokens', label: 'Tokens', icon: KeyRound, end: false },
   { to: '/settings', label: 'Settings', icon: Settings, end: false },
 ] as const;

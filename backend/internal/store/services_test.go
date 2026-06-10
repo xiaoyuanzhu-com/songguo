@@ -15,7 +15,7 @@ func TestServiceCRUDRoundTrip(t *testing.T) {
 		Priority: 1,
 		Weight:   2,
 		Enabled:  true,
-		APIKeys:  []string{"sk-aaa", "sk-bbb"},
+		APIKey:   "sk-aaa",
 		Models: []ServiceModel{
 			{Model: "gpt-4o", Input: 2.5, Output: 10, Unit: "per_1m_tokens"},
 			{Model: "gpt-4o-mini", Input: 0.15, Output: 0.6, Unit: "per_1m_tokens"},
@@ -27,8 +27,8 @@ func TestServiceCRUDRoundTrip(t *testing.T) {
 	if svc.ID == "" {
 		t.Fatal("expected generated service id")
 	}
-	if len(svc.Credentials) != 2 {
-		t.Fatalf("credentials = %d, want 2", len(svc.Credentials))
+	if svc.APIKey != "sk-aaa" {
+		t.Fatalf("api key = %q, want sk-aaa", svc.APIKey)
 	}
 	if len(svc.Models) != 2 {
 		t.Fatalf("models = %d, want 2", len(svc.Models))
@@ -63,21 +63,14 @@ func TestServiceCRUDRoundTrip(t *testing.T) {
 		t.Errorf("models not replaced: %+v", updated.Models)
 	}
 
-	// Add + delete a credential.
-	cred, err := s.AddCredential(svc.ID, "sk-ccc")
+	// Replace the API key.
+	newKey := "sk-ccc"
+	updated, err = s.UpdateService(svc.ID, ServiceUpdate{APIKey: &newKey})
 	if err != nil {
-		t.Fatalf("AddCredential: %v", err)
+		t.Fatalf("UpdateService(api key): %v", err)
 	}
-	got, _ := s.GetService(svc.ID)
-	if len(got.Credentials) != 3 {
-		t.Fatalf("after add credentials = %d, want 3", len(got.Credentials))
-	}
-	if err := s.DeleteCredential(svc.ID, cred.ID); err != nil {
-		t.Fatalf("DeleteCredential: %v", err)
-	}
-	got, _ = s.GetService(svc.ID)
-	if len(got.Credentials) != 2 {
-		t.Fatalf("after delete credentials = %d, want 2", len(got.Credentials))
+	if updated.APIKey != "sk-ccc" {
+		t.Fatalf("api key after replace = %q, want sk-ccc", updated.APIKey)
 	}
 
 	// List + count.
@@ -88,7 +81,7 @@ func TestServiceCRUDRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListServices: %v", err)
 	}
-	if len(list) != 1 || len(list[0].Credentials) != 2 || len(list[0].Models) != 1 {
+	if len(list) != 1 || list[0].APIKey != "sk-ccc" || len(list[0].Models) != 1 {
 		t.Errorf("ListServices assembly wrong: %+v", list)
 	}
 
@@ -184,6 +177,52 @@ func TestWireBackfillOnMigration(t *testing.T) {
 	}
 	if len(got.Wires) != 0 {
 		t.Errorf("wires re-added on idempotent migrate: %v", got.Wires)
+	}
+}
+
+// TestCredentialPoolFoldOnMigration simulates a database from the multi-key
+// pool era: when migrate() finds a service_credentials table, each service's
+// oldest key must be folded into services.api_key and the table dropped.
+func TestCredentialPoolFoldOnMigration(t *testing.T) {
+	s := openTestStore(t)
+
+	svc, err := s.CreateService(NewService{
+		Name: "legacy", BaseURL: "https://x.example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+
+	// Rewind to the pool era: recreate the table with two keys, oldest first.
+	stmts := []string{
+		`CREATE TABLE service_credentials (
+			id TEXT PRIMARY KEY,
+			service_id TEXT NOT NULL,
+			api_key TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		)`,
+		`INSERT INTO service_credentials VALUES ('c1', '` + svc.ID + `', 'sk-old', 100)`,
+		`INSERT INTO service_credentials VALUES ('c2', '` + svc.ID + `', 'sk-new', 200)`,
+	}
+	for _, q := range stmts {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	got, err := s.GetService(svc.ID)
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	if got.APIKey != "sk-old" {
+		t.Errorf("api_key = %q, want oldest pool key sk-old", got.APIKey)
+	}
+	if ok, _ := s.tableExists("service_credentials"); ok {
+		t.Error("service_credentials table should be dropped after fold")
 	}
 }
 

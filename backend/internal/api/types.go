@@ -187,23 +187,20 @@ type vendorView struct {
 	ServedModels []string             `json:"served_models"`
 	Priority     int                  `json:"priority"`
 	Weight       int                  `json:"weight"`
-	Credentials  []credentialView     `json:"credentials"`
+	Credential   credentialView       `json:"credential"`
 	Prices       map[string]priceView `json:"prices"`
 	Stats        vendorStatsView      `json:"stats"`
 }
 
 // newVendorView builds a vendor view from config plus computed stats. The raw
-// api_key is intentionally dropped; only masked previews are emitted.
+// api_key is intentionally dropped; only a masked preview is emitted.
 func newVendorView(v config.Vendor, stat store.VendorStat, hasStat bool) vendorView {
 	models := v.ServedModels
 	if models == nil {
 		models = []string{}
 	}
 
-	creds := make([]credentialView, 0, len(v.Credentials))
-	for _, c := range v.Credentials {
-		creds = append(creds, credentialView{ID: c.ID, MaskedKey: maskKey(c.APIKey)})
-	}
+	cred := credentialView{ID: v.Credential.ID, MaskedKey: maskKey(v.Credential.APIKey)}
 
 	prices := make(map[string]priceView, len(v.Prices))
 	for model, p := range v.Prices {
@@ -228,7 +225,7 @@ func newVendorView(v config.Vendor, stat store.VendorStat, hasStat bool) vendorV
 		ServedModels: models,
 		Priority:     v.Priority,
 		Weight:       v.Weight,
-		Credentials:  creds,
+		Credential:   cred,
 		Prices:       prices,
 		Stats:        sv,
 	}

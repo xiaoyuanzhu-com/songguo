@@ -72,8 +72,7 @@ vendors:
     served_models: [gpt-4o, text-embedding-3-small]
     priority: 1                            # lower = preferred
     weight: 1                              # weighted round-robin within a priority
-    credentials:                           # the 号池 — rotated to spread per-key limits
-      - { id: openai-key-1, api_key: sk-... }
+    credential: { id: openai-key-1, api_key: sk-... }   # one key per service
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
 ```
@@ -82,8 +81,8 @@ vendors:
 
 Songguo's transparent proxy serves two shapes from one handler, chosen by the request path:
 
-- **Model-routed (`/v1/...`)** — the ergonomic default. Point any OpenAI-compatible SDK at `http://<songguo>/v1`; the model is read from the body and routed across every vendor that serves it (priority → weighted RR → credential rotation → failover). The upstream URL is `base_url + (path after /v1)`.
-- **Explicit passthrough (`/x/<vendor>/...`)** — pin a vendor by name and forward the rest of the path to its **host** (`base_url`'s `scheme://host`, path stripped). **No model is required**, which makes DashScope's native generation endpoints and async image/video **submit→poll** flows forwardable (e.g. `POST /x/bailian/api/v1/services/aigc/.../generation`, then `GET /x/bailian/api/v1/tasks/{id}`). **WebSocket upgrades on this path are proxied too** (realtime APIs): the handshake is replayed with the credential swapped and frames are piped untouched, metered by bytes + duration. Failover here is across that vendor's **own credentials** only; a scoped token may be limited to specific vendors.
+- **Model-routed (`/v1/...`)** — the ergonomic default. Point any OpenAI-compatible SDK at `http://<songguo>/v1`; the model is read from the body and routed across every vendor that serves it (priority → weighted RR → failover). The upstream URL is `base_url + (path after /v1)`.
+- **Explicit passthrough (`/x/<vendor>/...`)** — pin a vendor by name and forward the rest of the path to its **host** (`base_url`'s `scheme://host`, path stripped). **No model is required**, which makes DashScope's native generation endpoints and async image/video **submit→poll** flows forwardable (e.g. `POST /x/bailian/api/v1/services/aigc/.../generation`, then `GET /x/bailian/api/v1/tasks/{id}`). **WebSocket upgrades on this path are proxied too** (realtime APIs): the handshake is replayed with the credential swapped and frames are piped untouched, metered by bytes + duration. Each service holds **one credential**, so this mode is a single attempt; a scoped token may be limited to specific vendors. To spread load over several keys for the same platform, configure several services that serve the same models.
 
 **`base_url` convention:** it is the vendor's *published* base **including any version/path prefix** — OpenAI `https://api.openai.com/v1`, Ark/方舟 `https://ark.cn-beijing.volces.com/api/v3`, DashScope/百炼 `https://dashscope.aliyuncs.com/compatible-mode/v1`, DeepSeek `https://api.deepseek.com`. So a model-routed `/v1/chat/completions` reaches `…/api/v3/chat/completions` on Ark, while a passthrough `/x/bailian/api/v1/tasks/abc` reaches `https://dashscope.aliyuncs.com/api/v1/tasks/abc`.
 

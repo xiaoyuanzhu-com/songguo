@@ -30,8 +30,7 @@ vendors:
   - name: a
     base_url: https://a.example
     served_models: [gpt-4o]
-    credentials:
-      - {id: a1, api_key: k}
+    credential: {id: a1, api_key: k}
 `)
 	r := New(staticSnap(snap))
 	if _, err := r.Candidates("nonexistent"); !errors.Is(err, ErrNoVendor) {
@@ -46,14 +45,13 @@ func TestCandidatesNilSnapshot(t *testing.T) {
 	}
 }
 
-func TestCandidatesSingleVendorSingleCred(t *testing.T) {
+func TestCandidatesSingleVendor(t *testing.T) {
 	snap := buildSnapshot(t, `
 vendors:
   - name: a
     base_url: https://a.example
     served_models: [gpt-4o]
-    credentials:
-      - {id: a1, api_key: k}
+    credential: {id: a1, api_key: k}
 `)
 	r := New(staticSnap(snap))
 	got, err := r.Candidates("gpt-4o")
@@ -65,36 +63,21 @@ vendors:
 	}
 }
 
-func TestCredentialRotation(t *testing.T) {
+func TestCredentialIDDefaultsToVendorName(t *testing.T) {
 	snap := buildSnapshot(t, `
 vendors:
   - name: a
     base_url: https://a.example
-    served_models: [m]
-    credentials:
-      - {id: a1, api_key: k1}
-      - {id: a2, api_key: k2}
-      - {id: a3, api_key: k3}
+    served_models: [gpt-4o]
+    credential: {api_key: k}
 `)
 	r := New(staticSnap(snap))
-
-	// Each call rotates the leading credential; all three appear each call.
-	firsts := make([]string, 0, 3)
-	for i := 0; i < 3; i++ {
-		got, err := r.Candidates("m")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(got) != 3 {
-			t.Fatalf("call %d: want 3 targets, got %d", i, len(got))
-		}
-		firsts = append(firsts, got[0].Credential.ID)
+	got, err := r.Candidates("gpt-4o")
+	if err != nil {
+		t.Fatal(err)
 	}
-	want := []string{"a1", "a2", "a3"}
-	for i := range want {
-		if firsts[i] != want[i] {
-			t.Fatalf("rotation firsts = %v, want %v", firsts, want)
-		}
+	if got[0].Credential.ID != "a" {
+		t.Fatalf("credential id = %q, want vendor name fallback", got[0].Credential.ID)
 	}
 }
 
@@ -105,14 +88,12 @@ vendors:
     base_url: https://low.example
     served_models: [m]
     priority: 2
-    credentials:
-      - {id: l1, api_key: k}
+    credential: {id: l1, api_key: k}
   - name: high
     base_url: https://high.example
     served_models: [m]
     priority: 1
-    credentials:
-      - {id: h1, api_key: k}
+    credential: {id: h1, api_key: k}
 `)
 	r := New(staticSnap(snap))
 	got, err := r.Candidates("m")
@@ -132,15 +113,13 @@ vendors:
     served_models: [m]
     priority: 1
     weight: 3
-    credentials:
-      - {id: h1, api_key: k}
+    credential: {id: h1, api_key: k}
   - name: light
     base_url: https://light.example
     served_models: [m]
     priority: 1
     weight: 1
-    credentials:
-      - {id: l1, api_key: k}
+    credential: {id: l1, api_key: k}
 `)
 	r := New(staticSnap(snap))
 
@@ -167,14 +146,12 @@ vendors:
     base_url: https://a.example
     served_models: [m]
     priority: 1
-    credentials:
-      - {id: a1, api_key: k}
+    credential: {id: a1, api_key: k}
   - name: b
     base_url: https://b.example
     served_models: [m]
     priority: 1
-    credentials:
-      - {id: b1, api_key: k}
+    credential: {id: b1, api_key: k}
 `)
 	r := New(staticSnap(snap))
 
@@ -210,14 +187,12 @@ vendors:
     base_url: https://a.example
     served_models: [m]
     priority: 1
-    credentials:
-      - {id: a1, api_key: k}
+    credential: {id: a1, api_key: k}
   - name: b
     base_url: https://b.example
     served_models: [m]
     priority: 1
-    credentials:
-      - {id: b1, api_key: k}
+    credential: {id: b1, api_key: k}
 `)
 	r := New(staticSnap(snap))
 
@@ -252,14 +227,12 @@ vendors:
     base_url: https://a.example
     served_models: [m]
     priority: 1
-    credentials:
-      - {id: a1, api_key: k}
+    credential: {id: a1, api_key: k}
   - name: b
     base_url: https://b.example
     served_models: [m]
     priority: 1
-    credentials:
-      - {id: b1, api_key: k}
+    credential: {id: b1, api_key: k}
 `)
 	r := New(staticSnap(snap))
 	r.Report("a", "a1", 503, nil)
@@ -281,14 +254,12 @@ vendors:
     base_url: https://a.example
     served_models: [m]
     priority: 1
-    credentials:
-      - {id: a1, api_key: k}
+    credential: {id: a1, api_key: k}
   - name: b
     base_url: https://b.example
     served_models: [m]
     priority: 1
-    credentials:
-      - {id: b1, api_key: k}
+    credential: {id: b1, api_key: k}
 `)
 	r := New(staticSnap(snap))
 	r.Report("a", "a1", 0, fmt.Errorf("dial tcp: connection refused"))
@@ -298,38 +269,21 @@ vendors:
 	}
 }
 
-func TestCandidatesForVendorRotates(t *testing.T) {
+func TestCandidatesForVendor(t *testing.T) {
 	snap := buildSnapshot(t, `
 vendors:
   - name: bailian
     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
     served_models: [qwen-plus]
-    credentials:
-      - {id: c1, api_key: k1}
-      - {id: c2, api_key: k2}
+    credential: {id: c1, api_key: k1}
 `)
 	r := New(staticSnap(snap))
-
-	// Each call returns both credentials, rotating the leading one. Failover in
-	// passthrough mode walks this list across the vendor's own key pool.
-	firsts := make([]string, 0, 2)
-	for i := 0; i < 2; i++ {
-		got, err := r.CandidatesForVendor("bailian")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(got) != 2 {
-			t.Fatalf("call %d: want 2 targets, got %d", i, len(got))
-		}
-		for _, tg := range got {
-			if tg.Vendor.Name != "bailian" {
-				t.Fatalf("target vendor = %q, want bailian", tg.Vendor.Name)
-			}
-		}
-		firsts = append(firsts, got[0].Credential.ID)
+	got, err := r.CandidatesForVendor("bailian")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if firsts[0] != "c1" || firsts[1] != "c2" {
-		t.Fatalf("rotation firsts = %v, want [c1 c2]", firsts)
+	if len(got) != 1 || got[0].Vendor.Name != "bailian" || got[0].Credential.ID != "c1" {
+		t.Fatalf("got %+v", got)
 	}
 }
 
@@ -339,8 +293,7 @@ vendors:
   - name: bailian
     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
     served_models: [qwen-plus]
-    credentials:
-      - {id: c1, api_key: k1}
+    credential: {id: c1, api_key: k1}
 `)
 	r := New(staticSnap(snap))
 	if _, err := r.CandidatesForVendor("nope"); !errors.Is(err, ErrNoVendor) {
@@ -363,16 +316,13 @@ vendors:
     served_models: [m]
     priority: 1
     weight: 2
-    credentials:
-      - {id: a1, api_key: k}
-      - {id: a2, api_key: k}
+    credential: {id: a1, api_key: k}
   - name: b
     base_url: https://b.example
     served_models: [m]
     priority: 1
     weight: 1
-    credentials:
-      - {id: b1, api_key: k}
+    credential: {id: b1, api_key: k}
 `)
 	r := New(staticSnap(snap))
 

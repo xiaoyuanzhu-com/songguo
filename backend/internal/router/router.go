@@ -1,14 +1,16 @@
-// Package router selects a vendor and credential for a requested model.
+// Package router selects a vendor for a requested model.
 //
 // For each model the router produces an ordered list of attempts ([]Target)
 // honoring, in order: priority groups (lower first), weighted round-robin
-// within a group, health-based failover (vendors in cooldown pushed to the
-// back), and per-vendor credential rotation across the key pool (号池).
+// within a group, and health-based failover (vendors in cooldown pushed to the
+// back). Each vendor contributes exactly one attempt with its single
+// credential; spreading load across multiple keys is done by configuring
+// multiple services that serve the same model.
 //
 // It reads the live config Snapshot on every call so hot-reloads are honored,
-// and keeps only small per-(model,priority) and per-vendor rotation counters
-// plus a vendor health map. All mutable state is mutex-guarded; Candidates and
-// Report are safe for concurrent use.
+// and keeps only small per-(model,priority) rotation counters plus a vendor
+// health map. All mutable state is mutex-guarded; Candidates and Report are
+// safe for concurrent use.
 package router
 
 import (
@@ -28,7 +30,7 @@ var ErrNoVendor = errors.New("router: no vendor serves model")
 // cooldown is how long a vendor stays demoted after a failure.
 const cooldown = 30 * time.Second
 
-// Target is a single attempt: a vendor paired with one of its credentials.
+// Target is a single attempt: a vendor paired with its credential.
 type Target struct {
 	Vendor     config.Vendor
 	Credential config.Credential
@@ -41,7 +43,6 @@ type Router struct {
 
 	mu       sync.Mutex
 	wrr      map[string]int       // "model\x00priority" -> next weighted-RR cursor
-	credRR   map[string]int       // vendor name -> next credential offset
 	coolDown map[string]time.Time // vendor name -> cooldown expiry
 }
 
@@ -51,15 +52,14 @@ func New(snapshot func() *config.Snapshot) *Router {
 		snapshot: snapshot,
 		now:      time.Now,
 		wrr:      make(map[string]int),
-		credRR:   make(map[string]int),
 		coolDown: make(map[string]time.Time),
 	}
 }
 
 // Candidates returns the ordered list of attempts for model. The order is:
 // priority group ascending; within a group, healthy vendors before cooling-down
-// vendors, each in weighted round-robin order; per vendor, its credentials in
-// rotated order. Returns ErrNoVendor if nothing serves the model.
+// vendors, each in weighted round-robin order. Returns ErrNoVendor if nothing
+// serves the model.
 func (r *Router) Candidates(model string) ([]Target, error) {
 	snap := r.snapshot()
 	var vendors []config.Vendor
@@ -90,17 +90,15 @@ func (r *Router) Candidates(model string) ([]Target, error) {
 	for _, prio := range priorities {
 		ordered := r.orderGroup(model, prio, groups[prio], now)
 		for _, v := range ordered {
-			targets = append(targets, r.credTargets(v)...)
+			targets = append(targets, Target{Vendor: v, Credential: v.Credential})
 		}
 	}
 	return targets, nil
 }
 
-// CandidatesForVendor returns the attempts for a single named vendor: its
-// credentials in rotated order (reusing the per-vendor 号池 rotation). It is used
-// by explicit-vendor passthrough, where the caller has pinned the vendor and
-// failover is across that vendor's own key pool only. Returns ErrNoVendor if no
-// vendor of that name exists.
+// CandidatesForVendor returns the single attempt for a named vendor. It is used
+// by explicit-vendor passthrough, where the caller has pinned the vendor and no
+// failover applies. Returns ErrNoVendor if no vendor of that name exists.
 func (r *Router) CandidatesForVendor(name string) ([]Target, error) {
 	snap := r.snapshot()
 	if snap == nil {
@@ -110,15 +108,7 @@ func (r *Router) CandidatesForVendor(name string) ([]Target, error) {
 	if !ok {
 		return nil, ErrNoVendor
 	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	targets := r.credTargets(v)
-	if len(targets) == 0 {
-		return nil, ErrNoVendor
-	}
-	return targets, nil
+	return []Target{{Vendor: v, Credential: v.Credential}}, nil
 }
 
 // orderGroup orders one priority group: weighted round-robin first, then a
@@ -210,24 +200,6 @@ func interleave(group []config.Vendor) []config.Vendor {
 		slots = append(slots, group[best])
 	}
 	return slots
-}
-
-// credTargets emits a vendor's credentials in rotated order, advancing the
-// per-vendor offset by one so repeated calls and same-vendor failover spread
-// across the key pool.
-func (r *Router) credTargets(v config.Vendor) []Target {
-	creds := v.Credentials
-	if len(creds) == 0 {
-		return nil
-	}
-	start := r.credRR[v.Name]
-	r.credRR[v.Name] = (start + 1) % len(creds)
-
-	out := make([]Target, 0, len(creds))
-	for i := 0; i < len(creds); i++ {
-		out = append(out, Target{Vendor: v, Credential: creds[(start+i)%len(creds)]})
-	}
-	return out
 }
 
 // Report records the outcome of an attempt. A transport error or a status of

@@ -166,3 +166,28 @@
 .docs:hover {
   text-decoration: underline;
 }
+
+.custom {
+  align-items: flex-start;
+  text-align: left;
+  cursor: pointer;
+  border-style: dashed;
+  background: var(--surface-2);
+  font: inherit;
+  color: inherit;
+}
+
+.custom:hover {
+  border-color: var(--accent);
+}
+
+.customIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-control);
+  background: var(--accent-weak);
+  color: var(--accent);
+}

@@ -35,7 +35,9 @@ type Settings struct {
 	CaptureRetain int `yaml:"capture_retain"`
 }
 
-// Credential is a single upstream API key within a vendor's key pool (号池).
+// Credential is a vendor's upstream API key. A vendor holds exactly one; to
+// use several keys against the same platform, configure several services that
+// serve the same models and let model routing spread across them.
 type Credential struct {
 	ID     string `yaml:"id"`
 	APIKey string `yaml:"api_key"`
@@ -69,7 +71,7 @@ type Vendor struct {
 	ServedModels []string         `yaml:"served_models"`
 	Priority     int              `yaml:"priority"` // lower = preferred; default 0
 	Weight       int              `yaml:"weight"`   // weighted round-robin within a priority; normalized to >=1
-	Credentials  []Credential     `yaml:"credentials"`
+	Credential   Credential       `yaml:"credential"`
 	Prices       map[string]Price `yaml:"prices"`
 	// Wires is the allowlist of wire names (see internal/wire) the proxy may
 	// serve for this vendor; paths matching none are denied unless
@@ -146,6 +148,11 @@ func normalize(cfg *Config) {
 		if cfg.Vendors[i].Adapter == "" {
 			cfg.Vendors[i].Adapter = AdapterOpenAI
 		}
+		// The credential ID identifies which key served a call in the ledger;
+		// with one key per vendor it defaults to the vendor's own name.
+		if cfg.Vendors[i].Credential.ID == "" {
+			cfg.Vendors[i].Credential.ID = cfg.Vendors[i].Name
+		}
 	}
 }
 
@@ -162,7 +169,6 @@ func validate(cfg *Config) error {
 	}
 
 	seenVendor := make(map[string]struct{}, len(cfg.Vendors))
-	seenCredential := make(map[string]string) // credential id -> vendor that first declared it
 
 	for vi := range cfg.Vendors {
 		v := &cfg.Vendors[vi]
@@ -178,7 +184,9 @@ func validate(cfg *Config) error {
 
 		problems = append(problems, validateBaseURL(who, v.BaseURL)...)
 		problems = append(problems, validateServedModels(who, v.ServedModels)...)
-		problems = append(problems, validateCredentials(who, v.Credentials, seenCredential)...)
+		if v.Credential.APIKey == "" {
+			problems = append(problems, fmt.Errorf("%s: credential api_key must be non-empty", who))
+		}
 		problems = append(problems, validatePrices(who, v.Prices)...)
 	}
 
@@ -218,27 +226,6 @@ func validateServedModels(who string, models []string) []error {
 			continue
 		}
 		seen[m] = struct{}{}
-	}
-	return problems
-}
-
-func validateCredentials(who string, creds []Credential, seenCredential map[string]string) []error {
-	if len(creds) == 0 {
-		return []error{fmt.Errorf("%s: credentials must be non-empty", who)}
-	}
-	var problems []error
-	for ci := range creds {
-		c := creds[ci]
-		if c.ID == "" {
-			problems = append(problems, fmt.Errorf("%s: credential #%d has an empty id", who, ci))
-		} else if owner, dup := seenCredential[c.ID]; dup {
-			problems = append(problems, fmt.Errorf("%s: credential id %q already used by %s", who, c.ID, owner))
-		} else {
-			seenCredential[c.ID] = who
-		}
-		if c.APIKey == "" {
-			problems = append(problems, fmt.Errorf("%s: credential %q has an empty api_key", who, c.ID))
-		}
 	}
 	return problems
 }

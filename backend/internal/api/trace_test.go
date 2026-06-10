@@ -148,7 +148,7 @@ vendors:
   - name: openai
     base_url: https://api.openai.com
     served_models: [gpt-4o]
-    credentials: [{id: k1, api_key: sk-x}]
+    credential: {id: k1, api_key: sk-x}
     prices:
       gpt-4o: { input: 1, output: 1, unit: per_1m_tokens }
 `

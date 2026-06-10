@@ -31,9 +31,7 @@ vendors:
     served_models: [gpt-4o, text-embedding-3-small]
     priority: 1
     weight: 2
-    credentials:
-      - id: openai-key-1
-        api_key: ` + rawAPIKey + `
+    credential: {id: openai-key-1, api_key: ` + rawAPIKey + `}
     prices:
       gpt-4o:                  { input: 2.50, output: 10.00, unit: per_1m_tokens }
       text-embedding-3-small: { input: 0.02, output: 0,     unit: per_1m_tokens }
@@ -41,9 +39,7 @@ vendors:
     base_url: https://api.deepseek.com
     served_models: [deepseek-chat]
     priority: 2
-    credentials:
-      - id: deepseek-key-1
-        api_key: sk-another-secret
+    credential: {id: deepseek-key-1, api_key: sk-another-secret}
     prices:
       deepseek-chat: { input: 0.27, output: 1.10, unit: per_1m_tokens }
 `
@@ -680,10 +676,7 @@ func TestVendorsNeverLeakAPIKey(t *testing.T) {
 	if openai == nil {
 		t.Fatal("openai vendor missing")
 	}
-	if len(openai.Credentials) != 1 {
-		t.Fatalf("openai credentials = %d, want 1", len(openai.Credentials))
-	}
-	mk := openai.Credentials[0].MaskedKey
+	mk := openai.Credential.MaskedKey
 	if mk == "" || strings.Contains(mk, rawAPIKey) {
 		t.Errorf("masked_key invalid: %q", mk)
 	}
@@ -736,9 +729,7 @@ vendors:
   - name: mock
     base_url: ` + upstream.URL + `/compatible-mode/v1
     served_models: [m1]
-    credentials:
-      - id: k1
-        api_key: sk-mock-secret
+    credential: {id: k1, api_key: sk-mock-secret}
     prices:
       m1: { input: 1, output: 1, unit: per_1m_tokens }
 `
@@ -776,9 +767,7 @@ vendors:
   - name: dead
     base_url: http://127.0.0.1:1
     served_models: [m1]
-    credentials:
-      - id: k1
-        api_key: sk-mock-secret
+    credential: {id: k1, api_key: sk-mock-secret}
     prices:
       m1: { input: 1, output: 1, unit: per_1m_tokens }
 `

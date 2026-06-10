@@ -88,9 +88,6 @@ func cloneVendor(v Vendor) Vendor {
 	if v.ServedModels != nil {
 		out.ServedModels = append([]string(nil), v.ServedModels...)
 	}
-	if v.Credentials != nil {
-		out.Credentials = append([]Credential(nil), v.Credentials...)
-	}
 	if v.Prices != nil {
 		out.Prices = make(map[string]Price, len(v.Prices))
 		for k, p := range v.Prices {

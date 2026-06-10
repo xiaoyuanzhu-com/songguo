@@ -174,30 +174,6 @@
   padding: 2px 4px 2px 8px;
 }
 
-.credRemove {
-  display: inline-flex;
-  align-items: center;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  padding: 0;
-}
-
-.credRemove:hover {
-  color: var(--danger);
-}
-
-.addKey {
-  display: flex;
-  gap: 6px;
-  margin-top: 2px;
-}
-
-.addKey .input {
-  flex: 1;
-}
-
 .priceTable {
   width: 100%;
   border-collapse: collapse;

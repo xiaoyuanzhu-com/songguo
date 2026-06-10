@@ -59,11 +59,6 @@ func SeedFromConfig(st *store.Store, configPath string, logger *slog.Logger) (in
 
 	imported := 0
 	for _, v := range snap.Vendors() {
-		keys := make([]string, 0, len(v.Credentials))
-		for _, c := range v.Credentials {
-			keys = append(keys, c.APIKey)
-		}
-
 		models := make([]store.ServiceModel, 0, len(v.ServedModels))
 		for _, m := range v.ServedModels {
 			sm := store.ServiceModel{Model: m, Unit: "per_1m_tokens"}
@@ -90,7 +85,7 @@ func SeedFromConfig(st *store.Store, configPath string, logger *slog.Logger) (in
 			Enabled:        true,
 			AllowUnmatched: v.AllowUnmatched,
 			Quirks:         v.Quirks,
-			APIKeys:        keys,
+			APIKey:         v.Credential.APIKey,
 			Models:         models,
 			Wires:          wires,
 		}); err != nil {

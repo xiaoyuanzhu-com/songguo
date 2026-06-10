@@ -32,12 +32,12 @@ func TestManagerSkipsIncompleteServices(t *testing.T) {
 	// Complete + enabled → routes.
 	if _, err := st.CreateService(store.NewService{
 		Name: "good", Adapter: "openai-compatible", BaseURL: "https://api.openai.com/v1",
-		Enabled: true, APIKeys: []string{"sk-a"},
+		Enabled: true, APIKey: "sk-a",
 		Models: []store.ServiceModel{{Model: "gpt-4o", Input: 1, Output: 2, Unit: "per_1m_tokens"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// No credentials → skipped.
+	// No API key → skipped.
 	if _, err := st.CreateService(store.NewService{
 		Name: "nokeys", BaseURL: "https://x.example.com", Enabled: true,
 		Models: []store.ServiceModel{{Model: "m1", Unit: "per_1m_tokens"}},
@@ -47,8 +47,8 @@ func TestManagerSkipsIncompleteServices(t *testing.T) {
 	// Disabled → skipped.
 	if _, err := st.CreateService(store.NewService{
 		Name: "off", BaseURL: "https://y.example.com", Enabled: false,
-		APIKeys: []string{"sk-b"},
-		Models:  []store.ServiceModel{{Model: "m2", Unit: "per_1m_tokens"}},
+		APIKey: "sk-b",
+		Models: []store.ServiceModel{{Model: "m2", Unit: "per_1m_tokens"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestManagerSkipsIncompleteServices(t *testing.T) {
 		t.Errorf("VendorsForModel(gpt-4o) = %+v", vs)
 	}
 
-	// Adding a credential to the draft and reloading makes it routable.
+	// Setting a key on the draft and reloading makes it routable.
 	got, _ := st.ListServices()
 	var draftID string
 	for _, s := range got {
@@ -77,7 +77,8 @@ func TestManagerSkipsIncompleteServices(t *testing.T) {
 			draftID = s.ID
 		}
 	}
-	if _, err := st.AddCredential(draftID, "sk-c"); err != nil {
+	key := "sk-c"
+	if _, err := st.UpdateService(draftID, store.ServiceUpdate{APIKey: &key}); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Reload(); err != nil {
@@ -100,9 +101,7 @@ vendors:
   - name: openai
     base_url: https://api.openai.com/v1
     served_models: [gpt-4o, text-embedding-3-small]
-    credentials:
-      - id: k1
-        api_key: sk-aaa
+    credential: {id: k1, api_key: sk-aaa}
     prices:
       gpt-4o: { input: 2.5, output: 10, unit: per_1m_tokens }
 `

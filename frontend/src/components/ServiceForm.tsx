@@ -180,6 +180,7 @@ export function ServiceForm({ editing, prefill, onClose, onSaved }: ServiceFormP
           models: parsedModels,
           wires,
         };
+        if (apiKey.trim()) body.api_key = apiKey.trim();
         const saved = await api.patchService(editing.id, body);
         onSaved(saved, false);
       } else {
@@ -194,7 +195,7 @@ export function ServiceForm({ editing, prefill, onClose, onSaved }: ServiceFormP
           catalog_id: catalogId || undefined,
           allow_unmatched: allowUnmatched,
           quirks,
-          api_keys: apiKey.trim() ? [apiKey.trim()] : [],
+          api_key: apiKey.trim() || undefined,
           models: parsedModels,
           wires,
         };
@@ -274,22 +275,28 @@ export function ServiceForm({ editing, prefill, onClose, onSaved }: ServiceFormP
           </span>
         </div>
 
-        {!isEdit && (
-          <div className={styles.field}>
-            <label className={styles.label} htmlFor="s-key">
-              API key
-            </label>
-            <input
-              id="s-key"
-              className="input mono"
-              type="password"
-              value={apiKey}
-              placeholder="sk-…  (add more keys later to rotate the pool)"
-              onChange={(e) => setApiKey(e.target.value)}
-            />
-            <span className={styles.hint}>Stored as-is; shown masked afterwards.</span>
-          </div>
-        )}
+        <div className={styles.field}>
+          <label className={styles.label} htmlFor="s-key">
+            API key
+          </label>
+          <input
+            id="s-key"
+            className="input mono"
+            type="password"
+            value={apiKey}
+            placeholder={
+              isEdit
+                ? editing?.masked_key
+                  ? `${editing.masked_key} — leave blank to keep`
+                  : 'No key set — paste one to start routing'
+                : 'sk-…'
+            }
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+          <span className={styles.hint}>
+            One key per service. Stored as-is; shown masked afterwards.
+          </span>
+        </div>
 
         <div className={styles.grid3}>
           <div className={styles.field}>

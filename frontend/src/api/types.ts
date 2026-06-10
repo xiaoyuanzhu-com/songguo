@@ -143,7 +143,7 @@ export interface Vendor {
   served_models: string[];
   priority: number;
   weight: number;
-  credentials: Credential[];
+  credential: Credential;
   prices: Record<string, Price>;
   stats: VendorStats;
 }
@@ -166,12 +166,6 @@ export interface ServiceModel {
   unit: string;
 }
 
-export interface ServiceCredential {
-  id: string;
-  masked_key: string;
-  created_at: string;
-}
-
 export interface Service {
   id: string;
   name: string;
@@ -187,7 +181,8 @@ export interface Service {
   /** Forward unmatched paths metered-zero instead of denying them. */
   allow_unmatched: boolean;
   quirks: Record<string, string>;
-  credentials: ServiceCredential[];
+  /** Masked preview of the service's API key; "" when no key is set. */
+  masked_key: string;
   models: ServiceModel[];
   created_at: string;
   updated_at: string;
@@ -205,7 +200,7 @@ export interface CreateServiceBody {
   catalog_id?: string;
   allow_unmatched?: boolean;
   quirks?: Record<string, string>;
-  api_keys?: string[];
+  api_key?: string;
   models: ServiceModel[];
   wires?: string[];
 }
@@ -220,6 +215,8 @@ export type PatchServiceBody = Partial<{
   enabled: boolean;
   allow_unmatched: boolean;
   quirks: Record<string, string>;
+  /** Replaces the service's API key when present and non-empty. */
+  api_key: string;
   models: ServiceModel[];
   wires: string[];
 }>;
