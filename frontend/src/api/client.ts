@@ -200,6 +200,9 @@ export const api = {
 
   catalog: () => request<Catalog>('/catalog'),
 
+  /** All registered wire names (for the service form's allowlist picker). */
+  wires: () => request<string[]>('/wires'),
+
   pricing: () => request<PricingRow[]>('/pricing'),
 
   /**

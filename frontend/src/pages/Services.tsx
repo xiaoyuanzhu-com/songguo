@@ -280,6 +280,30 @@ function ServiceCard({ service, onChanged, onEdit, onDelete }: ServiceCardProps)
             </div>
           </div>
 
+          <span className={styles.sectionTitle}>Wires</span>
+          <div className={styles.creds} style={{ marginBottom: 10 }}>
+            {service.wires.length === 0 ? (
+              <span className="muted" style={{ fontSize: 12 }}>
+                No wires enabled — all paths are denied.
+              </span>
+            ) : (
+              service.wires.map((w) => (
+                <span key={w} className="chip chip-mono" style={{ fontSize: 11 }}>
+                  {w}
+                </span>
+              ))
+            )}
+            {service.allow_unmatched && (
+              <span
+                className="chip"
+                style={{ fontSize: 11, color: 'var(--danger, #b54)', fontWeight: 600 }}
+                title="Unmatched paths are forwarded but metered zero"
+              >
+                allow unmatched
+              </span>
+            )}
+          </div>
+
           <span className={styles.sectionTitle}>Credentials (key pool)</span>
           <div className={styles.creds}>
             {service.credentials.length === 0 ? (
@@ -332,6 +356,7 @@ function ServiceCard({ service, onChanged, onEdit, onDelete }: ServiceCardProps)
                   <th>Model</th>
                   <th style={{ textAlign: 'right' }}>Input</th>
                   <th style={{ textAlign: 'right' }}>Output</th>
+                  <th style={{ textAlign: 'right' }}>Cached</th>
                   <th>Unit</th>
                 </tr>
               </thead>
@@ -341,6 +366,7 @@ function ServiceCard({ service, onChanged, onEdit, onDelete }: ServiceCardProps)
                     <td className="mono">{m.model}</td>
                     <td className="n">{m.input}</td>
                     <td className="n">{m.output}</td>
+                    <td className="n">{m.cached_input || '—'}</td>
                     <td className="mono">{m.unit}</td>
                   </tr>
                 ))}

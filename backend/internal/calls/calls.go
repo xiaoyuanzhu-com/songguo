@@ -24,6 +24,21 @@ const (
 	ModalityUnknown   Modality = "unknown"
 )
 
+// Confidence grades how trustworthy an Entry's metering is.
+type Confidence string
+
+const (
+	// ConfidenceMeasured: usage was parsed from the upstream response by a
+	// matching wire extractor (or the wire is zero-cost by definition).
+	ConfidenceMeasured Confidence = "measured"
+	// ConfidenceDerived: usage was estimated from request-side data (e.g.
+	// counting TTS input characters) rather than reported by the upstream.
+	ConfidenceDerived Confidence = "derived"
+	// ConfidenceUnknown: no usage could be determined; cost is 0 and the
+	// entry under-counts real spend.
+	ConfidenceUnknown Confidence = "unknown"
+)
+
 // Entry is one append-only call record (one call attempt).
 type Entry struct {
 	ID           int64
@@ -33,6 +48,8 @@ type Entry struct {
 	Modality     Modality
 	Vendor       string         // serving vendor name
 	CredentialID string         // which credential in the 号池 served it
+	Wire         string         // matched wire name (e.g. "openai/chat"); "" if unmatched
+	Confidence   Confidence     // metering trustworthiness
 	Attempt      int            // 1-based attempt number (failover increments)
 	Status       int            // upstream HTTP status (0 if no response)
 	Err          string         // error detail if any

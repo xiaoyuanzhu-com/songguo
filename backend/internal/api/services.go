@@ -8,16 +8,19 @@ import (
 	"time"
 
 	"github.com/songguo/songguo/internal/catalog"
+	"github.com/songguo/songguo/internal/configsvc"
 	"github.com/songguo/songguo/internal/store"
+	"github.com/songguo/songguo/internal/wire"
 )
 
 // --- views ---
 
 type serviceModelView struct {
-	Model  string  `json:"model"`
-	Input  float64 `json:"input"`
-	Output float64 `json:"output"`
-	Unit   string  `json:"unit"`
+	Model       string  `json:"model"`
+	Input       float64 `json:"input"`
+	Output      float64 `json:"output"`
+	CachedInput float64 `json:"cached_input"`
+	Unit        string  `json:"unit"`
 }
 
 type serviceCredentialView struct {
@@ -29,20 +32,23 @@ type serviceCredentialView struct {
 // serviceView is the JSON representation of a configured service. API keys are
 // never serialized in the clear — only masked previews.
 type serviceView struct {
-	ID          string                  `json:"id"`
-	Name        string                  `json:"name"`
-	Vendor      string                  `json:"vendor"`
-	Adapter     string                  `json:"adapter"`
-	BaseURL     string                  `json:"base_url"`
-	Priority    int                     `json:"priority"`
-	Weight      int                     `json:"weight"`
-	Enabled     bool                    `json:"enabled"`
-	CatalogID   string                  `json:"catalog_id"`
-	Credentials []serviceCredentialView `json:"credentials"`
-	Models      []serviceModelView      `json:"models"`
-	CreatedAt   string                  `json:"created_at"`
-	UpdatedAt   string                  `json:"updated_at"`
-	Stats       vendorStatsView         `json:"stats"`
+	ID             string                  `json:"id"`
+	Name           string                  `json:"name"`
+	Vendor         string                  `json:"vendor"`
+	Adapter        string                  `json:"adapter"`
+	BaseURL        string                  `json:"base_url"`
+	Priority       int                     `json:"priority"`
+	Weight         int                     `json:"weight"`
+	Enabled        bool                    `json:"enabled"`
+	CatalogID      string                  `json:"catalog_id"`
+	Wires          []string                `json:"wires"`
+	AllowUnmatched bool                    `json:"allow_unmatched"`
+	Quirks         map[string]string       `json:"quirks"`
+	Credentials    []serviceCredentialView `json:"credentials"`
+	Models         []serviceModelView      `json:"models"`
+	CreatedAt      string                  `json:"created_at"`
+	UpdatedAt      string                  `json:"updated_at"`
+	Stats          vendorStatsView         `json:"stats"`
 }
 
 func newServiceView(svc store.Service, stat store.VendorStat, hasStat bool) serviceView {
@@ -56,7 +62,7 @@ func newServiceView(svc store.Service, stat store.VendorStat, hasStat bool) serv
 	}
 	models := make([]serviceModelView, 0, len(svc.Models))
 	for _, m := range svc.Models {
-		models = append(models, serviceModelView{Model: m.Model, Input: m.Input, Output: m.Output, Unit: m.Unit})
+		models = append(models, serviceModelView{Model: m.Model, Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: m.Unit})
 	}
 
 	sv := vendorStatsView{Healthy: true}
@@ -72,54 +78,64 @@ func newServiceView(svc store.Service, stat store.VendorStat, hasStat bool) serv
 	}
 
 	return serviceView{
-		ID:          svc.ID,
-		Name:        svc.Name,
-		Vendor:      svc.Vendor,
-		Adapter:     svc.Adapter,
-		BaseURL:     svc.BaseURL,
-		Priority:    svc.Priority,
-		Weight:      svc.Weight,
-		Enabled:     svc.Enabled,
-		CatalogID:   svc.CatalogID,
-		Credentials: creds,
-		Models:      models,
-		CreatedAt:   svc.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:   svc.UpdatedAt.UTC().Format(time.RFC3339),
-		Stats:       sv,
+		ID:             svc.ID,
+		Name:           svc.Name,
+		Vendor:         svc.Vendor,
+		Adapter:        svc.Adapter,
+		BaseURL:        svc.BaseURL,
+		Priority:       svc.Priority,
+		Weight:         svc.Weight,
+		Enabled:        svc.Enabled,
+		CatalogID:      svc.CatalogID,
+		Wires:          svc.Wires,
+		AllowUnmatched: svc.AllowUnmatched,
+		Quirks:         svc.Quirks,
+		Credentials:    creds,
+		Models:         models,
+		CreatedAt:      svc.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:      svc.UpdatedAt.UTC().Format(time.RFC3339),
+		Stats:          sv,
 	}
 }
 
 // --- request bodies ---
 
 type serviceModelReq struct {
-	Model  string  `json:"model"`
-	Input  float64 `json:"input"`
-	Output float64 `json:"output"`
-	Unit   string  `json:"unit"`
+	Model       string  `json:"model"`
+	Input       float64 `json:"input"`
+	Output      float64 `json:"output"`
+	CachedInput float64 `json:"cached_input"`
+	Unit        string  `json:"unit"`
 }
 
 type createServiceReq struct {
-	Name      string            `json:"name"`
-	Vendor    string            `json:"vendor"`
-	Adapter   string            `json:"adapter"`
-	BaseURL   string            `json:"base_url"`
-	Priority  int               `json:"priority"`
-	Weight    int               `json:"weight"`
-	Enabled   *bool             `json:"enabled"`
-	CatalogID string            `json:"catalog_id"`
-	APIKeys   []string          `json:"api_keys"`
-	Models    []serviceModelReq `json:"models"`
+	Name           string            `json:"name"`
+	Vendor         string            `json:"vendor"`
+	Adapter        string            `json:"adapter"`
+	BaseURL        string            `json:"base_url"`
+	Priority       int               `json:"priority"`
+	Weight         int               `json:"weight"`
+	Enabled        *bool             `json:"enabled"`
+	CatalogID      string            `json:"catalog_id"`
+	AllowUnmatched bool              `json:"allow_unmatched"`
+	Quirks         map[string]string `json:"quirks"`
+	APIKeys        []string          `json:"api_keys"`
+	Models         []serviceModelReq `json:"models"`
+	Wires          []string          `json:"wires"`
 }
 
 type patchServiceReq struct {
-	Name     *string            `json:"name"`
-	Vendor   *string            `json:"vendor"`
-	Adapter  *string            `json:"adapter"`
-	BaseURL  *string            `json:"base_url"`
-	Priority *int               `json:"priority"`
-	Weight   *int               `json:"weight"`
-	Enabled  *bool              `json:"enabled"`
-	Models   *[]serviceModelReq `json:"models"`
+	Name           *string            `json:"name"`
+	Vendor         *string            `json:"vendor"`
+	Adapter        *string            `json:"adapter"`
+	BaseURL        *string            `json:"base_url"`
+	Priority       *int               `json:"priority"`
+	Weight         *int               `json:"weight"`
+	Enabled        *bool              `json:"enabled"`
+	AllowUnmatched *bool              `json:"allow_unmatched"`
+	Quirks         *map[string]string `json:"quirks"`
+	Models         *[]serviceModelReq `json:"models"`
+	Wires          *[]string          `json:"wires"`
 }
 
 // --- handlers ---
@@ -185,17 +201,27 @@ func (a *api) handleCreateService(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Wires default by adapter when omitted, so plain creates (old UI, curl)
+	// never produce a service that denies all traffic.
+	wires := req.Wires
+	if len(wires) == 0 {
+		wires = configsvc.DefaultWires(req.Adapter)
+	}
+
 	svc, err := a.store.CreateService(store.NewService{
-		Name:      strings.TrimSpace(req.Name),
-		Vendor:    req.Vendor,
-		Adapter:   req.Adapter,
-		BaseURL:   strings.TrimSpace(req.BaseURL),
-		Priority:  req.Priority,
-		Weight:    req.Weight,
-		Enabled:   enabled,
-		CatalogID: req.CatalogID,
-		APIKeys:   keys,
-		Models:    toStoreModels(req.Models),
+		Name:           strings.TrimSpace(req.Name),
+		Vendor:         req.Vendor,
+		Adapter:        req.Adapter,
+		BaseURL:        strings.TrimSpace(req.BaseURL),
+		Priority:       req.Priority,
+		Weight:         req.Weight,
+		Enabled:        enabled,
+		CatalogID:      req.CatalogID,
+		AllowUnmatched: req.AllowUnmatched,
+		Quirks:         req.Quirks,
+		APIKeys:        keys,
+		Models:         toStoreModels(req.Models),
+		Wires:          wires,
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -223,18 +249,26 @@ func (a *api) handlePatchService(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	upd := store.ServiceUpdate{
-		Name:     req.Name,
-		Vendor:   req.Vendor,
-		Adapter:  req.Adapter,
-		BaseURL:  req.BaseURL,
-		Priority: req.Priority,
-		Weight:   req.Weight,
-		Enabled:  req.Enabled,
+		Name:           req.Name,
+		Vendor:         req.Vendor,
+		Adapter:        req.Adapter,
+		BaseURL:        req.BaseURL,
+		Priority:       req.Priority,
+		Weight:         req.Weight,
+		Enabled:        req.Enabled,
+		AllowUnmatched: req.AllowUnmatched,
+		Quirks:         req.Quirks,
 	}
 	if req.Models != nil {
 		upd.Models = toStoreModels(*req.Models)
 		if upd.Models == nil {
 			upd.Models = []store.ServiceModel{} // explicit clear
+		}
+	}
+	if req.Wires != nil {
+		upd.Wires = *req.Wires
+		if upd.Wires == nil {
+			upd.Wires = []string{} // explicit clear
 		}
 	}
 
@@ -368,6 +402,12 @@ func (a *api) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, c)
 }
 
+// handleWires returns all registered wire names, for the service form's
+// allowlist picker.
+func (a *api) handleWires(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, wire.Names())
+}
+
 type patchSettingsReq struct {
 	Capture         *bool `json:"capture"`
 	CaptureMaxBytes *int  `json:"capture_max_bytes"`
@@ -427,7 +467,7 @@ func toStoreModels(in []serviceModelReq) []store.ServiceModel {
 		if unit == "" {
 			unit = "per_1m_tokens"
 		}
-		out = append(out, store.ServiceModel{Model: m.Model, Input: m.Input, Output: m.Output, Unit: unit})
+		out = append(out, store.ServiceModel{Model: m.Model, Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: unit})
 	}
 	return out
 }

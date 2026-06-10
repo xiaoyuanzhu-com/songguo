@@ -43,10 +43,11 @@ func (s *Store) AppendCall(e calls.Entry) (int64, error) {
 
 	res, err := s.db.Exec(
 		`INSERT INTO calls
-		 (ts, token_id, model, modality, vendor, credential_id, attempt, status, err, usage, cost, latency_ms, stream, tags)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 (ts, token_id, model, modality, vendor, credential_id, attempt, status, err, usage, cost, latency_ms, stream, tags, wire, confidence)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ts.UnixMilli(), e.TokenID, e.Model, string(modality), e.Vendor, e.CredentialID,
 		attempt, e.Status, e.Err, usageJSON, e.Cost, e.LatencyMS, boolToInt(e.Stream), tagsJSON,
+		e.Wire, string(e.Confidence),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("store: append call: %w", err)
@@ -106,7 +107,7 @@ func (f CallFilter) where() (string, []any) {
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
-const callsSelect = `SELECT id, ts, token_id, model, modality, vendor, credential_id, attempt, status, err, usage, cost, latency_ms, stream, tags FROM calls`
+const callsSelect = `SELECT id, ts, token_id, model, modality, vendor, credential_id, attempt, status, err, usage, cost, latency_ms, stream, tags, wire, confidence FROM calls`
 
 // QueryCalls returns matching entries ordered by ts DESC. Limit defaults to
 // 100 and is capped at 1000.
@@ -247,22 +248,25 @@ func (s *Store) SpendByModality(since, until *time.Time) (map[string]float64, er
 // scanEntry reads a single calls.Entry from a *sql.Rows.
 func scanEntry(rows *sql.Rows) (calls.Entry, error) {
 	var (
-		e         calls.Entry
-		tsMillis  int64
-		modality  string
-		usageJSON string
-		tagsJSON  string
-		stream    int
+		e          calls.Entry
+		tsMillis   int64
+		modality   string
+		usageJSON  string
+		tagsJSON   string
+		stream     int
+		confidence string
 	)
 	if err := rows.Scan(
 		&e.ID, &tsMillis, &e.TokenID, &e.Model, &modality, &e.Vendor, &e.CredentialID,
 		&e.Attempt, &e.Status, &e.Err, &usageJSON, &e.Cost, &e.LatencyMS, &stream, &tagsJSON,
+		&e.Wire, &confidence,
 	); err != nil {
 		return calls.Entry{}, err
 	}
 	e.TS = time.UnixMilli(tsMillis)
 	e.Modality = calls.Modality(modality)
 	e.Stream = stream != 0
+	e.Confidence = calls.Confidence(confidence)
 
 	if err := json.Unmarshal([]byte(usageJSON), &e.Usage); err != nil {
 		return calls.Entry{}, fmt.Errorf("store: decode usage: %w", err)

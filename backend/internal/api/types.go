@@ -62,6 +62,8 @@ type entryView struct {
 	Modality     string            `json:"modality"`
 	Vendor       string            `json:"vendor"`
 	CredentialID string            `json:"credential_id"`
+	Wire         string            `json:"wire"`
+	Confidence   string            `json:"confidence"`
 	Attempt      int               `json:"attempt"`
 	Status       int               `json:"status"`
 	Err          string            `json:"err"`
@@ -91,6 +93,8 @@ func newEntryView(e calls.Entry) entryView {
 		Modality:     string(e.Modality),
 		Vendor:       e.Vendor,
 		CredentialID: e.CredentialID,
+		Wire:         e.Wire,
+		Confidence:   string(e.Confidence),
 		Attempt:      e.Attempt,
 		Status:       e.Status,
 		Err:          e.Err,

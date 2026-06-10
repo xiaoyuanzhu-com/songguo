@@ -109,6 +109,7 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("DELETE /api/services/{id}/credentials/{cid}", a.handleDeleteCredential)
 	mux.HandleFunc("POST /api/services/{id}/test", a.handleTestService)
 	mux.HandleFunc("GET /api/catalog", a.handleCatalog)
+	mux.HandleFunc("GET /api/wires", a.handleWires)
 	mux.HandleFunc("GET /api/settings", a.handleSettings)
 	mux.HandleFunc("PATCH /api/settings", a.handlePatchSettings)
 	mux.HandleFunc("GET /api/pricing", a.handlePricing)

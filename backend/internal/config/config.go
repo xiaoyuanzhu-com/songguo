@@ -42,15 +42,19 @@ type Credential struct {
 }
 
 // Price is the true per-model cost used for metering and cheapest-route.
+// CachedInput is the rate for cache-hit input tokens; non-positive means
+// "charge the full Input rate" (no cache discount configured).
 type Price struct {
-	Input  float64 `yaml:"input"`
-	Output float64 `yaml:"output"`
-	Unit   string  `yaml:"unit"` // e.g. per_1m_tokens, per_1k_tokens, per_token, per_call, per_image, per_second, per_char
+	Input       float64 `yaml:"input"`
+	Output      float64 `yaml:"output"`
+	CachedInput float64 `yaml:"cached_input"`
+	Unit        string  `yaml:"unit"` // e.g. per_1m_tokens, per_1k_tokens, per_token, per_call, per_image, per_second, per_char
 }
 
-// Adapter names the upstream wire protocol a vendor speaks. It governs how the
-// proxy authenticates (header style) and, where supported, how usage is read
-// back for metering. An empty adapter normalizes to AdapterOpenAI.
+// Adapter names the auth scheme a vendor expects (header style applied when
+// the proxy swaps in the credential). It says nothing about usage extraction,
+// which is resolved per-request via the vendor's enabled wires (see
+// internal/wire). An empty adapter normalizes to AdapterOpenAI.
 const (
 	AdapterOpenAI    = "openai-compatible"
 	AdapterAnthropic = "anthropic-compatible"
@@ -61,12 +65,18 @@ const (
 type Vendor struct {
 	Name         string           `yaml:"name"`
 	BaseURL      string           `yaml:"base_url"`
-	Adapter      string           `yaml:"adapter"` // wire protocol; default openai-compatible
+	Adapter      string           `yaml:"adapter"` // auth scheme; default openai-compatible
 	ServedModels []string         `yaml:"served_models"`
 	Priority     int              `yaml:"priority"` // lower = preferred; default 0
 	Weight       int              `yaml:"weight"`   // weighted round-robin within a priority; normalized to >=1
 	Credentials  []Credential     `yaml:"credentials"`
 	Prices       map[string]Price `yaml:"prices"`
+	// Wires is the allowlist of wire names (see internal/wire) the proxy may
+	// serve for this vendor; paths matching none are denied unless
+	// AllowUnmatched forwards them metered-zero.
+	Wires          []string          `yaml:"wires"`
+	AllowUnmatched bool              `yaml:"allow_unmatched"`
+	Quirks         map[string]string `yaml:"quirks"`
 }
 
 // Config is the root of the YAML document.

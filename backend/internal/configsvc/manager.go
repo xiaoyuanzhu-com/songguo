@@ -20,6 +20,7 @@ import (
 
 	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/store"
+	"github.com/songguo/songguo/internal/wire"
 )
 
 // Manager owns the live snapshot derived from the store.
@@ -89,14 +90,16 @@ func (m *Manager) build() (*config.Snapshot, error) {
 				"service", svc.Name, "credentials", len(svc.Credentials), "models", len(svc.Models))
 			continue
 		}
-		cfg.Vendors = append(cfg.Vendors, vendorFromService(svc))
+		cfg.Vendors = append(cfg.Vendors, vendorFromService(svc, m.logger))
 	}
 
 	return config.Build(cfg)
 }
 
 // vendorFromService projects a stored service into a config.Vendor for routing.
-func vendorFromService(svc store.Service) config.Vendor {
+// Wire names not present in the registry are dropped with a warning so a typo
+// in the allowlist can never silently match traffic.
+func vendorFromService(svc store.Service, logger *slog.Logger) config.Vendor {
 	models := make([]string, 0, len(svc.Models))
 	prices := make(map[string]config.Price, len(svc.Models))
 	for _, m := range svc.Models {
@@ -105,7 +108,7 @@ func vendorFromService(svc store.Service) config.Vendor {
 		if unit == "" {
 			unit = "per_1m_tokens"
 		}
-		prices[m.Model] = config.Price{Input: m.Input, Output: m.Output, Unit: unit}
+		prices[m.Model] = config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: unit}
 	}
 
 	creds := make([]config.Credential, 0, len(svc.Credentials))
@@ -113,15 +116,27 @@ func vendorFromService(svc store.Service) config.Vendor {
 		creds = append(creds, config.Credential{ID: c.ID, APIKey: c.APIKey})
 	}
 
+	wires := make([]string, 0, len(svc.Wires))
+	for _, w := range svc.Wires {
+		if _, ok := wire.Get(w); !ok {
+			logger.Warn("dropping unknown wire from service allowlist", "service", svc.Name, "wire", w)
+			continue
+		}
+		wires = append(wires, w)
+	}
+
 	return config.Vendor{
-		Name:         svc.Name,
-		BaseURL:      svc.BaseURL,
-		Adapter:      svc.Adapter,
-		ServedModels: models,
-		Priority:     svc.Priority,
-		Weight:       svc.Weight,
-		Credentials:  creds,
-		Prices:       prices,
+		Name:           svc.Name,
+		BaseURL:        svc.BaseURL,
+		Adapter:        svc.Adapter,
+		ServedModels:   models,
+		Priority:       svc.Priority,
+		Weight:         svc.Weight,
+		Credentials:    creds,
+		Prices:         prices,
+		Wires:          wires,
+		AllowUnmatched: svc.AllowUnmatched,
+		Quirks:         svc.Quirks,
 	}
 }
 

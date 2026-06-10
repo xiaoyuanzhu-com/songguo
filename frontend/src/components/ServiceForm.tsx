@@ -3,6 +3,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import { api } from '../api/client';
 import type { CreateServiceBody, PatchServiceBody, Service, ServiceModel } from '../api/types';
 import { Modal } from './Modal';
+import { useFetch } from '../lib/useFetch';
 import styles from './ServiceForm.module.css';
 
 const UNITS = [
@@ -21,6 +22,12 @@ const ADAPTERS = [
   { value: 'mcp', label: 'MCP (listed only)' },
 ];
 
+/** Wire allowlist granted when the user picked none, mirroring the backend. */
+function defaultWires(adapter: string): string[] {
+  if (adapter === 'anthropic-compatible') return ['anthropic/messages', 'anthropic/models'];
+  return ['openai/chat', 'openai/completions', 'openai/embeddings', 'openai/models'];
+}
+
 /** Prefill seeds the form when adding from the catalog. */
 export interface ServicePrefill {
   name?: string;
@@ -28,6 +35,8 @@ export interface ServicePrefill {
   adapter?: string;
   base_url?: string;
   catalog_id?: string;
+  wires?: string[];
+  quirks?: Record<string, string>;
   models?: ServiceModel[];
 }
 
@@ -43,6 +52,7 @@ interface ModelRow {
   model: string;
   input: string;
   output: string;
+  cachedInput: string;
   unit: string;
 }
 
@@ -52,6 +62,7 @@ function toRows(models: ServiceModel[] | undefined): ModelRow[] {
     model: m.model,
     input: String(m.input ?? 0),
     output: String(m.output ?? 0),
+    cachedInput: String(m.cached_input ?? 0),
     unit: m.unit || 'per_1m_tokens',
   }));
 }
@@ -67,14 +78,37 @@ export function ServiceForm({ editing, prefill, onClose, onSaved }: ServiceFormP
   const [enabled, setEnabled] = useState(editing ? editing.enabled : true);
   const [apiKey, setApiKey] = useState('');
   const [models, setModels] = useState<ModelRow[]>(toRows(seed?.models));
+  const [wires, setWires] = useState<string[]>(
+    seed?.wires?.length ? seed.wires : defaultWires(seed?.adapter ?? 'openai-compatible'),
+  );
+  const [allowUnmatched, setAllowUnmatched] = useState(editing?.allow_unmatched ?? false);
+  const [quirks, setQuirks] = useState<Record<string, string>>(seed?.quirks ?? {});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  const allWires = useFetch(() => api.wires(), []);
+  const wireOptions = allWires.data ?? [];
 
   const isEdit = !!editing;
   const catalogId = editing?.catalog_id ?? prefill?.catalog_id ?? '';
 
+  const toggleWire = (w: string) =>
+    setWires((p) => (p.includes(w) ? p.filter((x) => x !== w) : [...p, w].sort()));
+
+  const injectStreamUsage = quirks['inject_stream_usage'] === 'true';
+  const setInjectStreamUsage = (on: boolean) =>
+    setQuirks((q) => {
+      const next = { ...q };
+      if (on) next['inject_stream_usage'] = 'true';
+      else delete next['inject_stream_usage'];
+      return next;
+    });
+
   const addModel = () =>
-    setModels((p) => [...p, { model: '', input: '0', output: '0', unit: 'per_1m_tokens' }]);
+    setModels((p) => [
+      ...p,
+      { model: '', input: '0', output: '0', cachedInput: '0', unit: 'per_1m_tokens' },
+    ]);
   const removeModel = (i: number) => setModels((p) => p.filter((_, idx) => idx !== i));
   const setModel = (i: number, patch: Partial<ModelRow>) =>
     setModels((p) => p.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
@@ -107,11 +141,19 @@ export function ServiceForm({ editing, prefill, onClose, onSaved }: ServiceFormP
       if (!m) continue;
       const input = Number(row.input || '0');
       const output = Number(row.output || '0');
-      if (Number.isNaN(input) || Number.isNaN(output) || input < 0 || output < 0) {
+      const cachedInput = Number(row.cachedInput || '0');
+      if (
+        Number.isNaN(input) ||
+        Number.isNaN(output) ||
+        Number.isNaN(cachedInput) ||
+        input < 0 ||
+        output < 0 ||
+        cachedInput < 0
+      ) {
         setErr(`Price for "${m}" must be non-negative numbers.`);
         return;
       }
-      parsedModels.push({ model: m, input, output, unit: row.unit });
+      parsedModels.push({ model: m, input, output, cached_input: cachedInput, unit: row.unit });
     }
 
     const prio = Number(priority || '0');
@@ -133,7 +175,10 @@ export function ServiceForm({ editing, prefill, onClose, onSaved }: ServiceFormP
           priority: prio,
           weight: wt,
           enabled,
+          allow_unmatched: allowUnmatched,
+          quirks,
           models: parsedModels,
+          wires,
         };
         const saved = await api.patchService(editing.id, body);
         onSaved(saved, false);
@@ -147,8 +192,11 @@ export function ServiceForm({ editing, prefill, onClose, onSaved }: ServiceFormP
           weight: wt,
           enabled,
           catalog_id: catalogId || undefined,
+          allow_unmatched: allowUnmatched,
+          quirks,
           api_keys: apiKey.trim() ? [apiKey.trim()] : [],
           models: parsedModels,
+          wires,
         };
         const saved = await api.createService(body);
         onSaved(saved, true);
@@ -284,6 +332,54 @@ export function ServiceForm({ editing, prefill, onClose, onSaved }: ServiceFormP
         </div>
 
         <div className={styles.field}>
+          <span className={styles.label}>Wires</span>
+          <span className={styles.hint}>
+            Endpoints the proxy may serve for this service. Requests matching no enabled
+            wire are denied (so every forwarded call has a pricing rule).
+          </span>
+          <div className={styles.wireGrid}>
+            {wireOptions.map((w) => (
+              <label key={w} className={styles.wireItem}>
+                <input type="checkbox" checked={wires.includes(w)} onChange={() => toggleWire(w)} />
+                <span className="mono">{w}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div className={styles.grid2}>
+          <div className={styles.field}>
+            <span className={styles.label}>Unmatched paths</span>
+            <label className={styles.toggleRow}>
+              <input
+                type="checkbox"
+                checked={allowUnmatched}
+                onChange={(e) => setAllowUnmatched(e.target.checked)}
+              />
+              <span>{allowUnmatched ? 'Forward (metered zero)' : 'Deny (recommended)'}</span>
+            </label>
+            <span className={styles.hint}>
+              Opt-in passthrough for endpoints without a wire — spend on them is not metered.
+            </span>
+          </div>
+          <div className={styles.field}>
+            <span className={styles.label}>Stream usage injection</span>
+            <label className={styles.toggleRow}>
+              <input
+                type="checkbox"
+                checked={injectStreamUsage}
+                onChange={(e) => setInjectStreamUsage(e.target.checked)}
+              />
+              <span>{injectStreamUsage ? 'Inject include_usage' : 'Off (bodies untouched)'}</span>
+            </label>
+            <span className={styles.hint}>
+              Some vendors omit usage from streams unless asked; this sets
+              stream_options.include_usage on streamed requests.
+            </span>
+          </div>
+        </div>
+
+        <div className={styles.field}>
           <div className={styles.modelsHead}>
             <span className={styles.label}>Models &amp; prices</span>
             <button type="button" className="btn btn-sm" onClick={addModel}>
@@ -292,6 +388,7 @@ export function ServiceForm({ editing, prefill, onClose, onSaved }: ServiceFormP
           </div>
           <span className={styles.hint}>
             Each row is a served model with its true per-unit price (used for metering).
+            &quot;Cached in&quot; is the rate for cache-hit input tokens; 0 = full input rate.
           </span>
           {models.length === 0 ? (
             <span className="muted" style={{ fontSize: 12.5 }}>
@@ -304,6 +401,7 @@ export function ServiceForm({ editing, prefill, onClose, onSaved }: ServiceFormP
                 <span>Model</span>
                 <span>Input</span>
                 <span>Output</span>
+                <span>Cached in</span>
                 <span>Unit</span>
                 <span />
               </div>
@@ -326,6 +424,12 @@ export function ServiceForm({ editing, prefill, onClose, onSaved }: ServiceFormP
                     inputMode="decimal"
                     value={row.output}
                     onChange={(e) => setModel(i, { output: e.target.value })}
+                  />
+                  <input
+                    className="input"
+                    inputMode="decimal"
+                    value={row.cachedInput}
+                    onChange={(e) => setModel(i, { cachedInput: e.target.value })}
                   />
                   <select
                     className="select"

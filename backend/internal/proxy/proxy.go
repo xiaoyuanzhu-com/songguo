@@ -3,10 +3,18 @@
 // The handler is a gate plus a meter: it authenticates the consumer token,
 // enforces scope, budget and rate limits, routes the request to an upstream
 // vendor (with failover), and records every attempt as a call. It NEVER
-// rewrites the request or response body — the only mutation is the
-// Authorization header, swapped from the consumer's Songguo token to the chosen
-// upstream credential. Metering is read-only sniffing and must never block or
-// alter traffic.
+// rewrites the request or response body — the only mutations are the
+// credential headers and, when a service explicitly opts in via the
+// inject_stream_usage quirk, setting stream_options.include_usage so streamed
+// calls stay meterable. Metering is read-only sniffing and must never block
+// or alter traffic.
+//
+// Every request must resolve to a wire (see internal/wire): the service's
+// enabled wire whose path pattern matches. The wire owns usage extraction and
+// the call's modality. Paths matching no enabled wire are denied — every
+// forwarded call must have a pricing rule — unless the service sets
+// allow_unmatched, which forwards the bytes metered-zero at unknown
+// confidence.
 //
 // Two routing modes share this handler, decided by the request path:
 //
@@ -39,6 +47,7 @@ import (
 	"github.com/songguo/songguo/internal/pricing"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/store"
+	"github.com/songguo/songguo/internal/wire"
 )
 
 // defaultMaxBodyBytes bounds both the buffered request body and a non-streaming
@@ -216,11 +225,20 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for i, t := range rt.targets {
 		attempt := i + 1
 		last := i == len(rt.targets)-1
+		rw := rt.wires[t.Vendor.Name]
+		modality := rt.modalityFor(t.Vendor.Name)
 
-		upReq, err := h.buildUpstreamRequest(r, t, rt.upstreamURL(t), body)
+		// The one sanctioned body mutation, per-service opt-in: ask the
+		// upstream to report usage on streamed calls so they stay meterable.
+		upBody := body
+		if rw.matched && rw.quirks[quirkInjectStreamUsage] == "true" {
+			upBody = injectStreamUsage(body)
+		}
+
+		upReq, err := h.buildUpstreamRequest(r, t, rt.upstreamURL(t), upBody)
 		if err != nil {
 			h.logger.Error("build upstream request failed", "err", err, "vendor", t.Vendor.Name)
-			h.recordFailure(token.ID, rt.model, rt.modality, t, attempt, 0, err, 0, tags)
+			h.recordFailure(token.ID, rt.model, modality, t, attempt, 0, err, 0, tags)
 			h.router.Report(t.Vendor.Name, t.Credential.ID, 0, err)
 			if last {
 				writeError(w, http.StatusBadGateway, "upstream_error", "failed to build upstream request")
@@ -235,7 +253,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		// Transport error: failover-eligible.
 		if err != nil {
-			h.recordFailure(token.ID, rt.model, rt.modality, t, attempt, 0, err, latency, tags)
+			h.recordFailure(token.ID, rt.model, modality, t, attempt, 0, err, latency, tags)
 			h.router.Report(t.Vendor.Name, t.Credential.ID, 0, err)
 			if last {
 				// Transparency: surface the real transport failure verbatim
@@ -248,7 +266,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		failover := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
 		if failover && !last {
-			h.recordFailure(token.ID, rt.model, rt.modality, t, attempt, resp.StatusCode,
+			h.recordFailure(token.ID, rt.model, modality, t, attempt, resp.StatusCode,
 				fmt.Errorf("upstream status %d", resp.StatusCode), latency, tags)
 			h.router.Report(t.Vendor.Name, t.Credential.ID, resp.StatusCode, nil)
 			drainAndClose(resp.Body)
@@ -258,20 +276,83 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// This is the chosen response (either a non-failover status, or the last
 		// target even if it failed). Report health, then forward verbatim.
 		h.router.Report(t.Vendor.Name, t.Credential.ID, resp.StatusCode, nil)
-		h.forward(w, r, resp, token.ID, rt.model, rt.modality, t, attempt, latency, tags, capCfg, body)
+		h.forward(w, r, resp, token.ID, rt.model, modality, rw, t, attempt, latency, tags, capCfg, body)
 		return
 	}
 }
 
 // route is the resolved plan for a request: the targets to try (in order, with
 // their failover policy already encoded as a set of own credentials or a
-// cross-vendor list), the model/modality to record, and a per-target builder
-// for the upstream URL.
+// cross-vendor list), the model/modality to record, a per-target builder for
+// the upstream URL, and the per-vendor resolved wire that owns metering.
 type route struct {
 	model       string
 	modality    calls.Modality
 	targets     []router.Target
 	upstreamURL func(router.Target) string
+	wires       map[string]resolvedWire // keyed by vendor name
+}
+
+// resolvedWire is the metering plan for one candidate vendor: the matched wire
+// (or matched=false for an allow_unmatched passthrough) plus the vendor's
+// quirk flags.
+type resolvedWire struct {
+	wire    wire.Wire
+	matched bool
+	quirks  wire.Quirks
+}
+
+// modalityFor returns the modality to record for a vendor: the matched wire's
+// modality, falling back to the route-level classification.
+func (rt route) modalityFor(vendorName string) calls.Modality {
+	if rw, ok := rt.wires[vendorName]; ok && rw.matched && rw.wire.Modality != "" {
+		return rw.wire.Modality
+	}
+	return rt.modality
+}
+
+// resolveWires matches the upstream path against each candidate vendor's
+// enabled wires, dropping vendors that match none (unless they allow
+// unmatched passthrough). It returns the surviving targets, their metering
+// plans, and the names of vendors that denied the path.
+func resolveWires(targets []router.Target, method, path string) (kept []router.Target, wires map[string]resolvedWire, denied []string) {
+	wires = make(map[string]resolvedWire, len(targets))
+	for _, t := range targets {
+		if _, seen := wires[t.Vendor.Name]; seen {
+			kept = append(kept, t)
+			continue
+		}
+		w, ok := wire.Resolve(t.Vendor.Wires, method, path)
+		switch {
+		case ok:
+			wires[t.Vendor.Name] = resolvedWire{wire: w, matched: true, quirks: wire.Quirks(t.Vendor.Quirks)}
+			kept = append(kept, t)
+		case t.Vendor.AllowUnmatched:
+			wires[t.Vendor.Name] = resolvedWire{quirks: wire.Quirks(t.Vendor.Quirks)}
+			kept = append(kept, t)
+		default:
+			denied = append(denied, t.Vendor.Name)
+		}
+	}
+	return kept, wires, denied
+}
+
+// denyUnmatched rejects a request whose path matched no enabled wire on any
+// candidate, and records the rejection as a call row so it surfaces on the
+// dashboard (the signal that a wire mapping is missing).
+func (h *handler) denyUnmatched(w http.ResponseWriter, r *http.Request, tokenID, model, path string, vendors []string) {
+	detail := fmt.Sprintf("no enabled wire matches %s %s on service %s; add a wire mapping or enable allow_unmatched",
+		r.Method, path, strings.Join(vendors, ", "))
+	h.append(calls.Entry{
+		TS:         h.now(),
+		TokenID:    tokenID,
+		Model:      model,
+		Vendor:     strings.Join(vendors, ","),
+		Status:     http.StatusNotFound,
+		Err:        "unmatched: " + r.Method + " " + path,
+		Confidence: calls.ConfidenceUnknown,
+	})
+	writeError(w, http.StatusNotFound, "wire_unmatched", detail)
 }
 
 // resolve dispatches on the request path to build the route, enforcing
@@ -313,10 +394,17 @@ func (h *handler) resolveModelRouted(w http.ResponseWriter, r *http.Request, tok
 		return route{}, false
 	}
 
+	kept, wires, denied := resolveWires(targets, r.Method, suffix)
+	if len(kept) == 0 {
+		h.denyUnmatched(w, r, token.ID, res.Model, suffix, denied)
+		return route{}, false
+	}
+
 	return route{
 		model:    res.Model,
 		modality: res.Modality,
-		targets:  targets,
+		targets:  kept,
+		wires:    wires,
 		upstreamURL: func(t router.Target) string {
 			return joinQuery(strings.TrimRight(t.Vendor.BaseURL, "/")+suffix, r.URL.RawQuery)
 		},
@@ -371,10 +459,17 @@ func (h *handler) resolvePassthrough(w http.ResponseWriter, r *http.Request, tok
 	// Best-effort metering only; model may be empty for model-less calls.
 	res := meter.Classify(r.Method, rest, body)
 
+	kept, wires, denied := resolveWires(targets, r.Method, rest)
+	if len(kept) == 0 {
+		h.denyUnmatched(w, r, token.ID, res.Model, rest, denied)
+		return route{}, false
+	}
+
 	return route{
 		model:    res.Model,
 		modality: res.Modality,
-		targets:  targets,
+		targets:  kept,
+		wires:    wires,
 		upstreamURL: func(router.Target) string {
 			return joinQuery(origin+rest, r.URL.RawQuery)
 		},
@@ -412,6 +507,44 @@ func applyUpstreamAuth(req *http.Request, adapter, key string) {
 	default:
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
+}
+
+// quirkInjectStreamUsage is the per-service opt-in flag (value "true") that
+// lets the proxy set stream_options.include_usage on streamed requests. Some
+// vendors (DeepSeek, Ark, DashScope) omit usage from SSE streams unless the
+// client asked for it, which would leave those calls metered zero. This is the
+// proxy's only body mutation and is off by default.
+const quirkInjectStreamUsage = "inject_stream_usage"
+
+// injectStreamUsage returns the body with stream_options.include_usage set to
+// true when (and only when) the body is a JSON object requesting a stream and
+// the option is not already present. Any other shape is returned unchanged.
+func injectStreamUsage(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	var obj map[string]any
+	dec := json.NewDecoder(strings.NewReader(string(body)))
+	dec.UseNumber() // preserve number representations across the re-marshal
+	if err := dec.Decode(&obj); err != nil {
+		return body
+	}
+	if stream, _ := obj["stream"].(bool); !stream {
+		return body
+	}
+	opts, _ := obj["stream_options"].(map[string]any)
+	if opts == nil {
+		opts = map[string]any{}
+	} else if _, set := opts["include_usage"]; set {
+		return body
+	}
+	opts["include_usage"] = true
+	obj["stream_options"] = opts
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 // joinQuery appends a raw query string to a URL if non-empty.
@@ -461,12 +594,13 @@ func (h *handler) captureFor(token store.Token) captureConfig {
 }
 
 // forward copies the chosen upstream response to the client verbatim and sniffs
-// usage as it passes. Streaming responses are streamed chunk-by-chunk and
-// flushed; non-streaming responses are buffered (bounded) and written whole.
-// When capture is on, it also tees a capped copy of the response body and
-// persists the redacted request/response payload after the call row is written.
+// usage as it passes, using the resolved wire's extractor. Streaming responses
+// are streamed chunk-by-chunk and flushed; non-streaming responses are buffered
+// (bounded) and written whole. When capture is on, it also tees a capped copy
+// of the response body and persists the redacted request/response payload after
+// the call row is written.
 func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Response,
-	tokenID, model string, modality calls.Modality, t router.Target, attempt int,
+	tokenID, model string, modality calls.Modality, rw resolvedWire, t router.Target, attempt int,
 	latency int64, tags map[string]string, capCfg captureConfig, reqBody []byte) {
 	defer resp.Body.Close()
 
@@ -476,21 +610,43 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 	w.WriteHeader(resp.StatusCode)
 
 	var (
-		usage         map[string]any
+		ext           wire.Extraction
 		respBody      []byte
 		respTruncated bool
 	)
 	if stream {
-		usage, respBody, respTruncated = h.streamBody(r.Context(), w, resp.Body, capCfg)
+		var scanner wire.StreamScanner
+		if rw.matched && rw.wire.NewScanner != nil {
+			scanner = rw.wire.NewScanner(rw.quirks)
+		}
+		respBody, respTruncated = h.streamBody(r.Context(), w, resp.Body, capCfg, scanner)
+		if scanner != nil {
+			ext = scanner.Result()
+		} else {
+			ext = wire.Extraction{Confidence: calls.ConfidenceUnknown}
+		}
 	} else {
-		usage, respBody, respTruncated = h.copyBody(w, resp.Body, capCfg)
+		var full []byte
+		full, respBody, respTruncated = h.copyBody(w, resp.Body, capCfg)
+		if rw.matched {
+			ext = rw.wire.Extract(full, rw.quirks)
+		} else {
+			ext = wire.Extraction{Confidence: calls.ConfidenceUnknown}
+		}
 	}
 
 	cost := 0.0
-	if snap := h.snapshot(); snap != nil {
-		if price, ok := snap.PriceFor(t.Vendor.Name, model); ok {
-			cost = pricing.Cost(price, usage)
+	if rw.matched && !rw.wire.ZeroCost {
+		if snap := h.snapshot(); snap != nil {
+			if price, ok := snap.PriceFor(t.Vendor.Name, model); ok {
+				cost = pricing.Cost(price, ext.Norm)
+			}
 		}
+	}
+
+	wireName := ""
+	if rw.matched {
+		wireName = rw.wire.Name
 	}
 
 	id, err := h.store.AppendCall(calls.Entry{
@@ -500,9 +656,11 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 		Modality:     modality,
 		Vendor:       t.Vendor.Name,
 		CredentialID: t.Credential.ID,
+		Wire:         wireName,
+		Confidence:   ext.Confidence,
 		Attempt:      attempt,
 		Status:       resp.StatusCode,
-		Usage:        usage,
+		Usage:        ext.Raw,
 		Cost:         cost,
 		LatencyMS:    latency,
 		Stream:       stream,
@@ -540,12 +698,11 @@ func (h *handler) savePayload(callID int64, r *http.Request, reqBody []byte,
 	}
 }
 
-// streamBody tees the SSE stream to the client, a usage scanner, and (when
-// capture is on) a capped buffer, flushing after each chunk so nothing is
-// buffered for the client. It returns the sniffed usage plus the captured body
-// and whether it was truncated.
-func (h *handler) streamBody(ctx context.Context, w http.ResponseWriter, src io.Reader, capCfg captureConfig) (map[string]any, []byte, bool) {
-	scanner := meter.NewStreamUsageScanner()
+// streamBody tees the SSE stream to the client, the wire's usage scanner (when
+// given), and (when capture is on) a capped buffer, flushing after each chunk
+// so nothing is buffered for the client. It returns the captured body and
+// whether it was truncated.
+func (h *handler) streamBody(ctx context.Context, w http.ResponseWriter, src io.Reader, capCfg captureConfig, scanner wire.StreamScanner) ([]byte, bool) {
 	flusher, _ := w.(http.Flusher)
 
 	var capture *cappedBuffer
@@ -564,7 +721,9 @@ func (h *handler) streamBody(ctx context.Context, w http.ResponseWriter, src io.
 			if _, werr := w.Write(chunk); werr != nil {
 				break
 			}
-			_, _ = scanner.Write(chunk)
+			if scanner != nil {
+				_, _ = scanner.Write(chunk)
+			}
 			if capture != nil {
 				capture.Write(chunk)
 			}
@@ -577,15 +736,15 @@ func (h *handler) streamBody(ctx context.Context, w http.ResponseWriter, src io.
 		}
 	}
 	if capture != nil {
-		return scanner.Usage(), capture.Bytes(), capture.Truncated()
+		return capture.Bytes(), capture.Truncated()
 	}
-	return scanner.Usage(), nil, false
+	return nil, false
 }
 
-// copyBody reads the full (bounded) non-streaming body, writes it to the client
-// unchanged, and extracts usage from it. When capture is on it returns a capped
-// copy of the body and whether it was truncated.
-func (h *handler) copyBody(w http.ResponseWriter, src io.Reader, capCfg captureConfig) (map[string]any, []byte, bool) {
+// copyBody reads the full (bounded) non-streaming body and writes it to the
+// client unchanged. It returns the full body (for usage extraction) plus, when
+// capture is on, a capped copy and whether it was truncated.
+func (h *handler) copyBody(w http.ResponseWriter, src io.Reader, capCfg captureConfig) (full, captured []byte, truncated bool) {
 	body, _, err := readBounded(src, h.maxBodyBytes)
 	if err != nil {
 		h.logger.Error("read upstream body failed", "err", err)
@@ -595,12 +754,11 @@ func (h *handler) copyBody(w http.ResponseWriter, src io.Reader, capCfg captureC
 			h.logger.Error("write client body failed", "err", werr)
 		}
 	}
-	usage := meter.ExtractUsage(body)
 	if capCfg.on {
-		captured, truncated := capBytes(body, capCfg.maxBytes)
-		return usage, captured, truncated
+		captured, truncated = capBytes(body, capCfg.maxBytes)
+		return body, captured, truncated
 	}
-	return usage, nil, false
+	return body, nil, false
 }
 
 // recordFailure appends a call row for a failed (failover-eligible) attempt.

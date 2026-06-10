@@ -47,6 +47,10 @@ export interface CallEntry {
   modality: string;
   vendor: string;
   credential_id: string;
+  /** Matched wire name (e.g. "openai/chat"); "" when no wire matched. */
+  wire: string;
+  /** Metering trustworthiness: measured | derived | unknown | "". */
+  confidence: string;
   attempt: number;
   status: number;
   err: string;
@@ -157,6 +161,8 @@ export interface ServiceModel {
   model: string;
   input: number;
   output: number;
+  /** Rate for cache-hit input tokens; 0 = no discount (full input rate). */
+  cached_input: number;
   unit: string;
 }
 
@@ -176,6 +182,11 @@ export interface Service {
   weight: number;
   enabled: boolean;
   catalog_id: string;
+  /** Enabled wire allowlist; paths matching none are denied. */
+  wires: string[];
+  /** Forward unmatched paths metered-zero instead of denying them. */
+  allow_unmatched: boolean;
+  quirks: Record<string, string>;
   credentials: ServiceCredential[];
   models: ServiceModel[];
   created_at: string;
@@ -192,8 +203,11 @@ export interface CreateServiceBody {
   weight?: number;
   enabled?: boolean;
   catalog_id?: string;
+  allow_unmatched?: boolean;
+  quirks?: Record<string, string>;
   api_keys?: string[];
   models: ServiceModel[];
+  wires?: string[];
 }
 
 export type PatchServiceBody = Partial<{
@@ -204,7 +218,10 @@ export type PatchServiceBody = Partial<{
   priority: number;
   weight: number;
   enabled: boolean;
+  allow_unmatched: boolean;
+  quirks: Record<string, string>;
   models: ServiceModel[];
+  wires: string[];
 }>;
 
 // --- Catalog (read-only preset directory) ---
@@ -213,6 +230,7 @@ export interface CatalogModel {
   model: string;
   input: number;
   output: number;
+  cached_input?: number;
   unit: string;
   context?: number;
   modalities?: string[];
@@ -226,6 +244,8 @@ export interface CatalogService {
   base_url: string;
   docs?: string;
   note?: string;
+  wires?: string[];
+  quirks?: Record<string, string>;
   models: CatalogModel[];
 }
 

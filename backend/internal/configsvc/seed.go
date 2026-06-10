@@ -9,6 +9,16 @@ import (
 	"github.com/songguo/songguo/internal/store"
 )
 
+// DefaultWires is the wire allowlist granted to a service when none is given
+// explicitly, keyed by the service's adapter (auth scheme). Catalog presets
+// override this with precise per-service lists.
+func DefaultWires(adapter string) []string {
+	if adapter == config.AdapterAnthropic {
+		return []string{"anthropic/messages", "anthropic/models"}
+	}
+	return []string{"openai/chat", "openai/completions", "openai/embeddings", "openai/models"}
+}
+
 // SeedFromConfig imports a legacy config.yaml into the store exactly once: only
 // when the store has no services yet and the file exists and parses. It lets an
 // existing file-based deployment carry its vendors, keys, and prices over to the
@@ -58,7 +68,7 @@ func SeedFromConfig(st *store.Store, configPath string, logger *slog.Logger) (in
 		for _, m := range v.ServedModels {
 			sm := store.ServiceModel{Model: m, Unit: "per_1m_tokens"}
 			if p, ok := v.Prices[m]; ok {
-				sm.Input, sm.Output = p.Input, p.Output
+				sm.Input, sm.Output, sm.CachedInput = p.Input, p.Output, p.CachedInput
 				if p.Unit != "" {
 					sm.Unit = p.Unit
 				}
@@ -66,15 +76,23 @@ func SeedFromConfig(st *store.Store, configPath string, logger *slog.Logger) (in
 			models = append(models, sm)
 		}
 
+		wires := v.Wires
+		if len(wires) == 0 {
+			wires = DefaultWires(v.Adapter)
+		}
+
 		if _, err := st.CreateService(store.NewService{
-			Name:     v.Name,
-			Adapter:  v.Adapter,
-			BaseURL:  v.BaseURL,
-			Priority: v.Priority,
-			Weight:   v.Weight,
-			Enabled:  true,
-			APIKeys:  keys,
-			Models:   models,
+			Name:           v.Name,
+			Adapter:        v.Adapter,
+			BaseURL:        v.BaseURL,
+			Priority:       v.Priority,
+			Weight:         v.Weight,
+			Enabled:        true,
+			AllowUnmatched: v.AllowUnmatched,
+			Quirks:         v.Quirks,
+			APIKeys:        keys,
+			Models:         models,
+			Wires:          wires,
 		}); err != nil {
 			logger.Warn("config seed: failed to import vendor", "vendor", v.Name, "err", err)
 			continue

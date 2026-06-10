@@ -126,3 +126,72 @@ func TestAppSettingsRoundTrip(t *testing.T) {
 		t.Errorf("settings not persisted: %+v", as)
 	}
 }
+
+// TestWireBackfillOnMigration simulates a database that predates the
+// service_wires table: when migrate() creates the table on a DB that already
+// has services, those services must be granted the default allowlist for
+// their adapter (or they would silently deny all traffic after the upgrade).
+func TestWireBackfillOnMigration(t *testing.T) {
+	s := openTestStore(t)
+
+	openaiSvc, err := s.CreateService(NewService{
+		Name: "legacy-openai", Adapter: "openai-compatible", BaseURL: "https://x.example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	anthroSvc, err := s.CreateService(NewService{
+		Name: "legacy-anthropic", Adapter: "anthropic-compatible", BaseURL: "https://y.example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+
+	// Rewind to the pre-wire era, then re-run migrations as a restart would.
+	if _, err := s.db.Exec(`DROP TABLE service_wires`); err != nil {
+		t.Fatalf("drop service_wires: %v", err)
+	}
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	got, err := s.GetService(openaiSvc.ID)
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	if len(got.Wires) == 0 || !containsStr(got.Wires, "openai/chat") {
+		t.Errorf("openai service wires = %v, want openai defaults", got.Wires)
+	}
+
+	got, err = s.GetService(anthroSvc.ID)
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	if !containsStr(got.Wires, "anthropic/messages") || containsStr(got.Wires, "openai/chat") {
+		t.Errorf("anthropic service wires = %v, want anthropic defaults", got.Wires)
+	}
+
+	// Re-running migrate with the table present must NOT re-add dropped wires.
+	if _, err := s.db.Exec(`DELETE FROM service_wires WHERE service_id = ?`, openaiSvc.ID); err != nil {
+		t.Fatalf("clear wires: %v", err)
+	}
+	if err := s.migrate(); err != nil {
+		t.Fatalf("second migrate: %v", err)
+	}
+	got, err = s.GetService(openaiSvc.ID)
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	if len(got.Wires) != 0 {
+		t.Errorf("wires re-added on idempotent migrate: %v", got.Wires)
+	}
+}
+
+func containsStr(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}

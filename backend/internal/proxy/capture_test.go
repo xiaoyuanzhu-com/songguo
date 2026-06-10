@@ -25,6 +25,7 @@ vendors:
     base_url: %s/v1
     served_models: [gpt-4o]
     priority: 1
+    wires: [openai/chat]
     credentials:
       - id: credA
         api_key: vendor-secret-key
@@ -187,6 +188,7 @@ vendors:
     base_url: %s/v1
     served_models: [gpt-4o]
     priority: 1
+    wires: [openai/chat]
     credentials:
       - id: credA
         api_key: keyA
@@ -196,6 +198,7 @@ vendors:
     base_url: %s/v1
     served_models: [gpt-4o]
     priority: 2
+    wires: [openai/chat]
     credentials:
       - id: credB
         api_key: keyB

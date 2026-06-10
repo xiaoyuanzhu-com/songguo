@@ -67,6 +67,15 @@ func (s *Store) Close() error {
 // migrate creates tables and indexes if they do not already exist. It is safe
 // to call repeatedly.
 func (s *Store) migrate() error {
+	// Detect whether service_wires predates this run: if the table is being
+	// created now on a database that already has services, those services were
+	// configured before wire allowlists existed and must be backfilled or they
+	// would deny all traffic.
+	hadWires, err := s.tableExists("service_wires")
+	if err != nil {
+		return err
+	}
+
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS tokens (
 			id         TEXT PRIMARY KEY,
@@ -146,8 +155,17 @@ func (s *Store) migrate() error {
 			unit        TEXT NOT NULL DEFAULT 'per_1m_tokens',
 			PRIMARY KEY (service_id, model)
 		)`,
+		// Per-service wire allowlist: which wire-protocol entries (path pattern +
+		// usage extractor, see internal/wire) the proxy may serve for a service.
+		// Paths matching no enabled wire are denied unless allow_unmatched is set.
+		`CREATE TABLE IF NOT EXISTS service_wires (
+			service_id  TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+			wire        TEXT NOT NULL,
+			PRIMARY KEY (service_id, wire)
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_service_credentials_service ON service_credentials(service_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_service_models_service ON service_models(service_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_service_wires_service ON service_wires(service_id)`,
 
 		// Gateway-wide settings as a singleton row, hot-applied via the config
 		// manager when changed from the dashboard.
@@ -163,6 +181,108 @@ func (s *Store) migrate() error {
 		if _, err := s.db.Exec(stmt); err != nil {
 			return fmt.Errorf("store: migrate: %w", err)
 		}
+	}
+
+	// Post-v1 columns live here rather than in the CREATE statements so the
+	// same path serves fresh and pre-existing databases.
+	adds := []struct{ table, col, decl string }{
+		{"calls", "wire", "TEXT NOT NULL DEFAULT ''"},
+		{"calls", "confidence", "TEXT NOT NULL DEFAULT ''"},
+		{"services", "allow_unmatched", "INTEGER NOT NULL DEFAULT 0"},
+		{"services", "quirks", "TEXT NOT NULL DEFAULT '{}'"},
+		{"service_models", "cached_input", "REAL NOT NULL DEFAULT 0"},
+	}
+	for _, a := range adds {
+		if err := s.addColumn(a.table, a.col, a.decl); err != nil {
+			return err
+		}
+	}
+
+	if !hadWires {
+		if err := s.backfillWires(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// tableExists reports whether a table is present in the schema.
+func (s *Store) tableExists(name string) (bool, error) {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&n); err != nil {
+		return false, fmt.Errorf("store: table exists %s: %w", name, err)
+	}
+	return n > 0, nil
+}
+
+// backfillWires grants pre-wire-era services the default allowlist for their
+// adapter (names must stay in sync with internal/wire registrations). Runs
+// only on the migration that introduces service_wires.
+func (s *Store) backfillWires() error {
+	defaults := map[string][]string{
+		"anthropic-compatible": {"anthropic/messages", "anthropic/models"},
+		"":                     {"openai/chat", "openai/completions", "openai/embeddings", "openai/models"},
+	}
+	rows, err := s.db.Query(`SELECT id, adapter FROM services`)
+	if err != nil {
+		return fmt.Errorf("store: backfill wires: %w", err)
+	}
+	defer rows.Close()
+	type svc struct{ id, adapter string }
+	var svcs []svc
+	for rows.Next() {
+		var v svc
+		if err := rows.Scan(&v.id, &v.adapter); err != nil {
+			return fmt.Errorf("store: backfill wires: %w", err)
+		}
+		svcs = append(svcs, v)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store: backfill wires: %w", err)
+	}
+	for _, v := range svcs {
+		wires, ok := defaults[v.adapter]
+		if !ok {
+			wires = defaults[""]
+		}
+		for _, w := range wires {
+			if _, err := s.db.Exec(`INSERT OR IGNORE INTO service_wires (service_id, wire) VALUES (?, ?)`, v.id, w); err != nil {
+				return fmt.Errorf("store: backfill wires: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// addColumn adds a column to a table if it is not already present, making
+// schema evolution idempotent without a version table.
+func (s *Store) addColumn(table, col, decl string) error {
+	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return fmt.Errorf("store: table_info %s: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			typ     string
+			notNull int
+			dflt    sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return fmt.Errorf("store: table_info %s: %w", table, err)
+		}
+		if name == col {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store: table_info %s: %w", table, err)
+	}
+	if _, err := s.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, col, decl)); err != nil {
+		return fmt.Errorf("store: add column %s.%s: %w", table, col, err)
 	}
 	return nil
 }

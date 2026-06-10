@@ -59,10 +59,13 @@ export function CatalogPage() {
       adapter: service.adapter,
       base_url: service.base_url,
       catalog_id: service.id,
+      wires: service.wires,
+      quirks: service.quirks,
       models: service.models.map((m) => ({
         model: m.model,
         input: m.input,
         output: m.output,
+        cached_input: m.cached_input ?? 0,
         unit: m.unit,
       })),
     });

@@ -29,26 +29,31 @@ type Vendor struct {
 }
 
 // Service is one preset: an adapter + base_url + the models it serves, plus
-// descriptive metadata for the listing/playground.
+// descriptive metadata for the listing/playground. Wires is the wire
+// allowlist instantiated services start with; Quirks parameterize usage
+// extraction (see internal/wire).
 type Service struct {
-	ID      string  `json:"id"`
-	Name    string  `json:"name"`
-	Kind    string  `json:"kind"` // chat, embedding, asr, tts, image, mcp, ...
-	Adapter string  `json:"adapter"`
-	BaseURL string  `json:"base_url"`
-	Docs    string  `json:"docs,omitempty"`
-	Note    string  `json:"note,omitempty"`
-	Models  []Model `json:"models"`
+	ID      string            `json:"id"`
+	Name    string            `json:"name"`
+	Kind    string            `json:"kind"` // chat, embedding, asr, tts, image, mcp, ...
+	Adapter string            `json:"adapter"`
+	BaseURL string            `json:"base_url"`
+	Docs    string            `json:"docs,omitempty"`
+	Note    string            `json:"note,omitempty"`
+	Wires   []string          `json:"wires,omitempty"`
+	Quirks  map[string]string `json:"quirks,omitempty"`
+	Models  []Model           `json:"models"`
 }
 
 // Model is a catalog model with its default price and descriptive metadata.
 type Model struct {
-	Model      string   `json:"model"`
-	Input      float64  `json:"input"`
-	Output     float64  `json:"output"`
-	Unit       string   `json:"unit"`
-	Context    int      `json:"context,omitempty"`
-	Modalities []string `json:"modalities,omitempty"`
+	Model       string   `json:"model"`
+	Input       float64  `json:"input"`
+	Output      float64  `json:"output"`
+	CachedInput float64  `json:"cached_input,omitempty"`
+	Unit        string   `json:"unit"`
+	Context     int      `json:"context,omitempty"`
+	Modalities  []string `json:"modalities,omitempty"`
 }
 
 // Load parses the embedded catalog. It fails fast if catalog.json is malformed,

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/songguo/songguo/internal/calls"
 	"github.com/songguo/songguo/internal/config"
 	"github.com/songguo/songguo/internal/router"
 	"github.com/songguo/songguo/internal/server"
@@ -146,28 +147,34 @@ func (e *testEnv) callRows(t *testing.T) []callRow {
 	out := make([]callRow, len(entries))
 	for i, en := range entries {
 		out[i] = callRow{
-			Vendor:  en.Vendor,
-			Status:  en.Status,
-			Attempt: en.Attempt,
-			Model:   en.Model,
-			Cost:    en.Cost,
-			Stream:  en.Stream,
-			Usage:   en.Usage,
-			Tags:    en.Tags,
+			Vendor:     en.Vendor,
+			Status:     en.Status,
+			Attempt:    en.Attempt,
+			Model:      en.Model,
+			Cost:       en.Cost,
+			Stream:     en.Stream,
+			Usage:      en.Usage,
+			Tags:       en.Tags,
+			Wire:       en.Wire,
+			Confidence: string(en.Confidence),
+			Err:        en.Err,
 		}
 	}
 	return out
 }
 
 type callRow struct {
-	Vendor  string
-	Status  int
-	Attempt int
-	Model   string
-	Cost    float64
-	Stream  bool
-	Usage   map[string]any
-	Tags    map[string]string
+	Vendor     string
+	Status     int
+	Attempt    int
+	Model      string
+	Cost       float64
+	Stream     bool
+	Usage      map[string]any
+	Tags       map[string]string
+	Wire       string
+	Confidence string
+	Err        string
 }
 
 func storeFilterAll() store.CallFilter { return store.CallFilter{Limit: 1000} }
@@ -220,6 +227,7 @@ vendors:
     base_url: %s/v1
     served_models: [gpt-4o]
     priority: 1
+    wires: [openai/chat, openai/completions, openai/embeddings, openai/models]
     credentials:
       - id: credA
         api_key: vendor-secret-key
@@ -284,6 +292,7 @@ vendors:
     base_url: %s/v1
     served_models: [text-embedding-3-small]
     priority: 1
+    wires: [openai/embeddings, openai/models]
     credentials:
       - id: credE
         api_key: emb-key
@@ -379,6 +388,7 @@ vendors:
     base_url: %s/v1
     served_models: [gpt-4o]
     priority: 1
+    wires: [openai/chat]
     credentials:
       - id: credA
         api_key: k
@@ -448,6 +458,7 @@ vendors:
     base_url: %s/v1
     served_models: [gpt-4o]
     priority: 1
+    wires: [openai/chat]
     credentials:
       - id: credA
         api_key: keyA
@@ -457,6 +468,7 @@ vendors:
     base_url: %s/v1
     served_models: [gpt-4o]
     priority: 2
+    wires: [openai/chat]
     credentials:
       - id: credB
         api_key: keyB
@@ -565,6 +577,7 @@ vendors:
     base_url: %s/v1
     served_models: [gpt-4o]
     priority: 1
+    wires: [openai/chat]
     credentials:
       - id: credA
         api_key: k
@@ -628,6 +641,7 @@ vendors:
     base_url: %s/v1
     served_models: [gpt-4o]
     priority: 1
+    wires: [openai/chat, openai/completions, openai/embeddings, openai/models]
     credentials:
       - id: %s
         api_key: %s
@@ -747,6 +761,7 @@ vendors:
     base_url: %s/api/v3
     served_models: [doubao-pro-32k]
     priority: 1
+    wires: [openai/chat]
     credentials:
       - id: arkKey
         api_key: ark-secret
@@ -800,8 +815,9 @@ func (p *pathRecorder) handler() http.HandlerFunc {
 
 // passthroughYAML builds a one-vendor config for passthrough tests. base_url
 // carries a non-trivial path prefix (DashScope's /compatible-mode/v1); Mode B
-// must strip it and forward to the host origin. served_models/prices key off
-// the native model name so cost is computed.
+// must strip it and forward to the host origin. The native endpoints exercised
+// here have no phase-1 wire, so the vendor opts into allow_unmatched: calls
+// are forwarded but metered zero at unknown confidence.
 func passthroughYAML(baseURL, vendor string) string {
 	return fmt.Sprintf(`
 vendors:
@@ -809,6 +825,8 @@ vendors:
     base_url: %s/compatible-mode/v1
     served_models: [qwen-plus]
     priority: 1
+    wires: [openai/chat]
+    allow_unmatched: true
     credentials:
       - id: %s-key
         api_key: %s-secret
@@ -817,7 +835,7 @@ vendors:
 `, vendor, baseURL, vendor, vendor)
 }
 
-// --- Test 12: Mode B native submit forwarded to origin+rest, usage metered ---
+// --- Test 12: Mode B native submit forwarded to origin+rest (allow_unmatched) ---
 
 func TestPassthroughNativeUsage(t *testing.T) {
 	rec := &pathRecorder{}
@@ -855,10 +873,13 @@ func TestPassthroughNativeUsage(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("call rows = %d, want 1", len(rows))
 	}
-	// input_tokens=12, output_tokens=8 -> 0.40*12/1e6 + 1.20*8/1e6.
-	wantCost := 0.40*12/1e6 + 1.20*8/1e6
-	if !approxEqual(rows[0].Cost, wantCost) {
-		t.Errorf("cost = %v, want %v", rows[0].Cost, wantCost)
+	// No wire matches the native path: the call is forwarded (allow_unmatched)
+	// but metered zero at unknown confidence — budget integrity over guesswork.
+	if rows[0].Cost != 0 {
+		t.Errorf("cost = %v, want 0 (unmatched paths are not priced)", rows[0].Cost)
+	}
+	if rows[0].Wire != "" || rows[0].Confidence != string(calls.ConfidenceUnknown) {
+		t.Errorf("wire/confidence = %q/%q, want \"\"/unknown", rows[0].Wire, rows[0].Confidence)
 	}
 	if rows[0].Vendor != "bailian" || rows[0].Status != 200 {
 		t.Errorf("row = %+v", rows[0])
@@ -971,6 +992,8 @@ vendors:
     base_url: %s/compatible-mode/v1
     served_models: [qwen-plus]
     priority: 1
+    wires: [openai/chat]
+    allow_unmatched: true
     credentials:
       - id: c1
         api_key: key1
@@ -1008,5 +1031,289 @@ vendors:
 	}
 	if !got500 || !got200 {
 		t.Errorf("expected one 500 row and one 200 row, got %+v", rows)
+	}
+}
+
+// --- Test 17: unmatched path denied (model-routed) -> 404 + recorded ---
+
+func TestUnmatchedDenyModelRouted(t *testing.T) {
+	up := &mockUpstream{}
+	mock := httptest.NewServer(up.handler())
+	defer mock.Close()
+	// vendorA enables only openai/embeddings: a chat call must be denied.
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: vendorA
+    base_url: %s/v1
+    served_models: [gpt-4o]
+    priority: 1
+    wires: [openai/embeddings]
+    credentials:
+      - id: credA
+        api_key: k
+    prices:
+      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+`, mock.URL)
+	st := openStore(t)
+	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","messages":[]}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 wire_unmatched", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "wire_unmatched") {
+		t.Errorf("body = %q, want wire_unmatched error", body)
+	}
+	if up.calls != 0 {
+		t.Fatalf("upstream called %d times for denied path", up.calls)
+	}
+
+	// The rejection is recorded so the dashboard surfaces the missing wire.
+	rows := env.callRows(t)
+	if len(rows) != 1 {
+		t.Fatalf("call rows = %d, want 1 (unmatched log)", len(rows))
+	}
+	r := rows[0]
+	if r.Status != 404 || r.Confidence != string(calls.ConfidenceUnknown) || !strings.Contains(r.Err, "unmatched:") {
+		t.Errorf("unmatched row = %+v", r)
+	}
+}
+
+// --- Test 18: unmatched path denied (passthrough, no allow_unmatched) ---
+
+func TestUnmatchedDenyPassthrough(t *testing.T) {
+	rec := &pathRecorder{}
+	mock := httptest.NewServer(rec.handler())
+	defer mock.Close()
+
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: bailian
+    base_url: %s/compatible-mode/v1
+    served_models: [qwen-plus]
+    priority: 1
+    wires: [openai/chat]
+    credentials:
+      - id: c1
+        api_key: key1
+    prices:
+      qwen-plus: { input: 0.40, output: 1.20, unit: per_1m_tokens }
+`, mock.URL)
+	st := openStore(t)
+	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	resp := env.post(t, "/x/bailian/api/v1/services/aigc/text-generation/generation", key, `{"model":"qwen-plus"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (no allow_unmatched)", resp.StatusCode)
+	}
+	rec.mu.Lock()
+	upCalls := len(rec.paths)
+	rec.mu.Unlock()
+	if upCalls != 0 {
+		t.Fatalf("upstream called for denied path")
+	}
+	// But a wired path on the same vendor still works.
+	resp2 := env.post(t, "/x/bailian/compatible-mode/v1/chat/completions", key, `{"model":"qwen-plus","messages":[]}`)
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("wired path status = %d, want 200", resp2.StatusCode)
+	}
+}
+
+// anthropicUpstream mimics an Anthropic-compatible vendor: non-stream returns
+// a Messages body; stream emits message_start (input usage) + message_delta
+// (output usage), the shape whose input_tokens the old scanner dropped.
+func anthropicUpstream() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Stream bool `json:"stream"`
+		}
+		_ = json.Unmarshal(body, &req)
+		if !req.Stream {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id":"msg_1","type":"message","usage":{"input_tokens":100,"output_tokens":25,"cache_read_input_tokens":40}}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fl, _ := w.(http.Flusher)
+		chunks := []string{
+			`event: message_start`,
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":100,"cache_read_input_tokens":40,"output_tokens":1}}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","delta":{"text":"hi"}}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":25}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}
+		for _, c := range chunks {
+			_, _ = io.WriteString(w, c+"\n")
+			if fl != nil {
+				fl.Flush()
+			}
+		}
+	}
+}
+
+func anthropicYAML(baseURL string) string {
+	return fmt.Sprintf(`
+vendors:
+  - name: anthro
+    base_url: %s/v1
+    adapter: anthropic-compatible
+    served_models: [claude-x]
+    priority: 1
+    wires: [anthropic/messages, anthropic/models]
+    credentials:
+      - id: credAn
+        api_key: anthro-key
+    prices:
+      claude-x: { input: 3.0, output: 15.0, cached_input: 0.3, unit: per_1m_tokens }
+`, baseURL)
+}
+
+// --- Test 19: anthropic streaming merges input + output usage and prices cache reads ---
+
+func TestAnthropicStreamingUsageMerged(t *testing.T) {
+	mock := httptest.NewServer(anthropicUpstream())
+	defer mock.Close()
+
+	st := openStore(t)
+	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, anthropicYAML(mock.URL)), st)
+
+	resp := env.post(t, "/v1/messages", key, `{"model":"claude-x","stream":true,"messages":[]}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	rows := env.callRows(t)
+	if len(rows) != 1 {
+		t.Fatalf("call rows = %d, want 1", len(rows))
+	}
+	r := rows[0]
+	if r.Wire != "anthropic/messages" || r.Confidence != string(calls.ConfidenceMeasured) {
+		t.Errorf("wire/confidence = %q/%q", r.Wire, r.Confidence)
+	}
+	// input_tokens from message_start MUST survive the merge.
+	if got := r.Usage["input_tokens"]; got != float64(100) {
+		t.Errorf("usage input_tokens = %v, want 100 (dropped by pre-wire scanner)", got)
+	}
+	if got := r.Usage["output_tokens"]; got != float64(25) {
+		t.Errorf("usage output_tokens = %v, want 25", got)
+	}
+	// Norm folds cache reads into input: in=140 (40 cached @0.3), out=25.
+	wantCost := (100*3.0 + 40*0.3 + 25*15.0) / 1e6
+	if !approxEqual(r.Cost, wantCost) {
+		t.Errorf("cost = %v, want %v", r.Cost, wantCost)
+	}
+}
+
+// --- Test 20: cached-input pricing on a non-stream deepseek-style call ---
+
+func TestCachedInputPricing(t *testing.T) {
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"x","usage":{"prompt_tokens":100,"completion_tokens":10,"prompt_cache_hit_tokens":90,"prompt_cache_miss_tokens":10}}`)
+	}))
+	defer mock.Close()
+
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: deepseek
+    base_url: %s/v1
+    served_models: [deepseek-v4-flash]
+    priority: 1
+    wires: [openai/chat]
+    quirks: { cache_tokens: deepseek }
+    credentials:
+      - id: credD
+        api_key: ds-key
+    prices:
+      deepseek-v4-flash: { input: 0.14, output: 0.28, cached_input: 0.0028, unit: per_1m_tokens }
+`, mock.URL)
+	st := openStore(t)
+	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	resp := env.post(t, "/v1/chat/completions", key, `{"model":"deepseek-v4-flash","messages":[]}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	rows := env.callRows(t)
+	if len(rows) != 1 {
+		t.Fatalf("call rows = %d, want 1", len(rows))
+	}
+	// 10 miss @0.14 + 90 hit @0.0028 + 10 out @0.28, per 1M.
+	wantCost := (10*0.14 + 90*0.0028 + 10*0.28) / 1e6
+	if !approxEqual(rows[0].Cost, wantCost) {
+		t.Errorf("cost = %v, want %v (cache-hit discount must apply)", rows[0].Cost, wantCost)
+	}
+}
+
+// --- Test 21: inject_stream_usage quirk rewrites only the upstream body, opt-in ---
+
+func TestInjectStreamUsageQuirk(t *testing.T) {
+	up := &mockUpstream{}
+	mock := httptest.NewServer(up.handler())
+	defer mock.Close()
+
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: vendorA
+    base_url: %s/v1
+    served_models: [gpt-4o]
+    priority: 1
+    wires: [openai/chat]
+    quirks: { inject_stream_usage: "true" }
+    credentials:
+      - id: credA
+        api_key: k
+    prices:
+      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+`, mock.URL)
+	st := openStore(t)
+	_, key := mustToken(t, st, store.NewToken{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	// Streamed request without stream_options: the quirk must add include_usage.
+	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","stream":true,"messages":[]}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	var sent map[string]any
+	if err := json.Unmarshal(up.lastBody, &sent); err != nil {
+		t.Fatalf("upstream body not JSON: %v", err)
+	}
+	opts, _ := sent["stream_options"].(map[string]any)
+	if opts == nil || opts["include_usage"] != true {
+		t.Errorf("upstream body missing injected stream_options.include_usage: %s", up.lastBody)
+	}
+
+	// Non-streamed request must pass through byte-for-byte (no injection).
+	plain := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
+	resp2 := env.post(t, "/v1/chat/completions", key, plain)
+	defer resp2.Body.Close()
+	_, _ = io.Copy(io.Discard, resp2.Body)
+	if string(up.lastBody) != plain {
+		t.Errorf("non-stream body changed: got %q want %q", up.lastBody, plain)
 	}
 }

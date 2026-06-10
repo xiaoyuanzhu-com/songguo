@@ -22,7 +22,7 @@ import styles from './Overview.module.css';
 const PAGE_SIZE = 25;
 const REFRESH_MS = LIVE_REFRESH_MS;
 /** Number of <td> in a call row — the expanded panel spans all of them. */
-const COL_COUNT = 8;
+const COL_COUNT = 10;
 
 interface CallsTableProps {
   since: number;
@@ -182,6 +182,8 @@ export function CallsTable({ since, until }: CallsTableProps) {
                   <th>Model</th>
                   <th>Modality</th>
                   <th>Vendor</th>
+                  <th>Wire</th>
+                  <th>Conf</th>
                   <th className="num">Cost</th>
                   <th className="num">Latency</th>
                   <th>Status</th>
@@ -238,6 +240,35 @@ interface CallRowProps {
   onToggle: () => void;
 }
 
+const CONFIDENCE_COLORS: Record<string, string> = {
+  measured: 'var(--accent, #2e7d5b)',
+  derived: '#d99a2b',
+  unknown: 'var(--text-muted)',
+};
+
+/** Small dot grading how trustworthy the call's metering is. */
+function ConfidenceDot({ confidence }: { confidence: string }) {
+  if (!confidence) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
+  const color = CONFIDENCE_COLORS[confidence] ?? 'var(--text-muted)';
+  return (
+    <span
+      title={`metering: ${confidence}`}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5 }}
+    >
+      <span
+        style={{
+          width: 7,
+          height: 7,
+          borderRadius: '50%',
+          background: color,
+          display: 'inline-block',
+        }}
+      />
+      {confidence}
+    </span>
+  );
+}
+
 function CallRow({ entry, open, onToggle }: CallRowProps) {
   return (
     <>
@@ -281,6 +312,12 @@ function CallRow({ entry, open, onToggle }: CallRowProps) {
           </span>
         </td>
         <td>{entry.vendor || '—'}</td>
+        <td className="mono" style={{ fontSize: 11.5 }}>
+          {entry.wire || '—'}
+        </td>
+        <td>
+          <ConfidenceDot confidence={entry.confidence} />
+        </td>
         <td className="num">{money(entry.cost)}</td>
         <td className="num">{ms(entry.latency_ms)}</td>
         <td>

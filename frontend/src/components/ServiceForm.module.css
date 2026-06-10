@@ -53,9 +53,25 @@
 
 .modelRow {
   display: grid;
-  grid-template-columns: 1.6fr 0.8fr 0.8fr 1.3fr 28px;
+  grid-template-columns: 1.5fr 0.7fr 0.7fr 0.7fr 1.2fr 28px;
   gap: 6px;
   align-items: center;
+}
+
+.wireGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 14px;
+  margin-top: 4px;
+}
+
+.wireItem {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
 }
 
 .modelHeader {
