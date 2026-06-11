@@ -232,6 +232,116 @@ func TestCredentialPoolFoldOnMigration(t *testing.T) {
 	}
 }
 
+// TestServicesRenameOnMigration simulates a services-era database and verifies
+// migrate() renames every table and column to the providers naming with data
+// intact.
+func TestServicesRenameOnMigration(t *testing.T) {
+	s := openTestStore(t)
+
+	pvd, err := s.CreateProvider(NewProvider{
+		Name: "legacy", BaseURL: "https://x.example.com",
+		Models: []ProviderModel{{Model: "m1", Input: 1, Output: 2}},
+		Wires:  []string{"openai/chat"},
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+
+	// Rewind to the services era: old table and column names.
+	stmts := []string{
+		`PRAGMA legacy_alter_table=ON`,
+		`ALTER TABLE providers RENAME TO services`,
+		`ALTER TABLE provider_models RENAME TO service_models`,
+		`ALTER TABLE service_models RENAME COLUMN provider_id TO service_id`,
+		`ALTER TABLE provider_wires RENAME TO service_wires`,
+		`ALTER TABLE service_wires RENAME COLUMN provider_id TO service_id`,
+		`PRAGMA legacy_alter_table=OFF`,
+	}
+	for _, q := range stmts {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatalf("setup %s: %v", q, err)
+		}
+	}
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	got, err := s.GetProvider(pvd.ID)
+	if err != nil {
+		t.Fatalf("GetProvider after rename: %v", err)
+	}
+	if len(got.Models) != 1 || got.Models[0].Model != "m1" {
+		t.Errorf("models = %v, want m1 preserved", got.Models)
+	}
+	if !containsStr(got.Wires, "openai/chat") {
+		t.Errorf("wires = %v, want openai/chat preserved", got.Wires)
+	}
+	for _, old := range []string{"services", "service_models", "service_wires"} {
+		if ok, _ := s.tableExists(old); ok {
+			t.Errorf("table %s should be gone after rename", old)
+		}
+	}
+}
+
+// TestServicesRenameRepairsInterruptedMigration simulates the state a buggy
+// earlier rename left behind: services and service_models already renamed but
+// provider_models still has the service_id column, service_wires never renamed,
+// and an empty provider_wires created by CREATE TABLE IF NOT EXISTS on a later
+// failed run. migrate() must repair all of it.
+func TestServicesRenameRepairsInterruptedMigration(t *testing.T) {
+	s := openTestStore(t)
+
+	pvd, err := s.CreateProvider(NewProvider{
+		Name: "legacy", BaseURL: "https://x.example.com",
+		Models: []ProviderModel{{Model: "m1", Input: 1, Output: 2}},
+		Wires:  []string{"openai/chat"},
+	})
+	if err != nil {
+		t.Fatalf("CreateProvider: %v", err)
+	}
+
+	stmts := []string{
+		`PRAGMA legacy_alter_table=ON`,
+		`ALTER TABLE provider_models RENAME COLUMN provider_id TO service_id`,
+		`ALTER TABLE provider_wires RENAME TO service_wires`,
+		`ALTER TABLE service_wires RENAME COLUMN provider_id TO service_id`,
+		`PRAGMA legacy_alter_table=OFF`,
+		// The interrupted run's CREATE TABLE IF NOT EXISTS made a fresh empty one.
+		`CREATE TABLE provider_wires (
+			provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+			wire        TEXT NOT NULL,
+			PRIMARY KEY (provider_id, wire)
+		)`,
+	}
+	for _, q := range stmts {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatalf("setup %s: %v", q, err)
+		}
+	}
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	got, err := s.GetProvider(pvd.ID)
+	if err != nil {
+		t.Fatalf("GetProvider after repair: %v", err)
+	}
+	if len(got.Models) != 1 || got.Models[0].Model != "m1" {
+		t.Errorf("models = %v, want m1 preserved", got.Models)
+	}
+	if !containsStr(got.Wires, "openai/chat") {
+		t.Errorf("wires = %v, want openai/chat folded back from service_wires", got.Wires)
+	}
+	if ok, _ := s.tableExists("service_wires"); ok {
+		t.Error("service_wires should be dropped after fold")
+	}
+	if ok, _ := s.hasColumn("provider_models", "service_id"); ok {
+		t.Error("provider_models.service_id should be renamed to provider_id")
+	}
+}
+
 func containsStr(s []string, v string) bool {
 	for _, x := range s {
 		if x == v {

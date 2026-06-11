@@ -68,7 +68,6 @@ func (s *Store) Close() error {
 // to call repeatedly.
 func (s *Store) migrate() error {
 	// Detect pre-rename tables before creating the new ones.
-	hasOldServices, _ := s.tableExists("services")
 	hasOldWires, _ := s.tableExists("service_wires")
 	hadCredPool, _ := s.tableExists("service_credentials")
 	// Detect whether provider_wires already existed before this migrate run
@@ -76,24 +75,11 @@ func (s *Store) migrate() error {
 	hadProviderWires, _ := s.tableExists("provider_wires")
 
 	// Step 1: Rename legacy tables services → providers, etc.
-	// Must run before CREATE TABLE so old tables are gone when new ones are created.
-	if hasOldServices {
-		s.db.Exec(`PRAGMA legacy_alter_table=ON`)
-		renameStmts := []string{
-			`ALTER TABLE services RENAME TO providers`,
-			`ALTER TABLE service_models RENAME TO provider_models`,
-			`ALTER TABLE service_models RENAME COLUMN service_id TO provider_id`,
-			`ALTER TABLE service_wires RENAME TO provider_wires`,
-			`ALTER TABLE service_wires RENAME COLUMN service_id TO provider_id`,
-			`DROP INDEX IF EXISTS idx_service_models_service`,
-			`DROP INDEX IF EXISTS idx_service_wires_service`,
-		}
-		for _, stmt := range renameStmts {
-			if _, err := s.db.Exec(stmt); err != nil {
-				return fmt.Errorf("store: rename services→providers: %w", err)
-			}
-		}
-		s.db.Exec(`PRAGMA legacy_alter_table=OFF`)
+	// Must run before CREATE TABLE so old tables are gone when new ones are
+	// created. Each statement is guarded by the current schema state so an
+	// interrupted earlier migration is repaired rather than skipped.
+	if err := s.renameServicesToProviders(); err != nil {
+		return err
 	}
 
 	// Step 2: Create tables (new names). IF NOT EXISTS means this is safe for
@@ -235,6 +221,65 @@ func (s *Store) migrate() error {
 	return nil
 }
 
+// renameServicesToProviders migrates the services-era schema to the providers
+// naming. Every step checks the live schema first, so it is idempotent and
+// also repairs databases left half-migrated by an interrupted run (e.g. a
+// renamed table whose column rename never happened, or an old service_wires
+// coexisting with a freshly created empty provider_wires).
+func (s *Store) renameServicesToProviders() error {
+	s.db.Exec(`PRAGMA legacy_alter_table=ON`)
+	defer s.db.Exec(`PRAGMA legacy_alter_table=OFF`)
+
+	exec := func(stmt string) error {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return fmt.Errorf("store: rename services→providers: %w", err)
+		}
+		return nil
+	}
+
+	if has, _ := s.tableExists("services"); has {
+		if err := exec(`ALTER TABLE services RENAME TO providers`); err != nil {
+			return err
+		}
+	}
+	if has, _ := s.tableExists("service_models"); has {
+		if err := exec(`ALTER TABLE service_models RENAME TO provider_models`); err != nil {
+			return err
+		}
+	}
+	if has, _ := s.hasColumn("provider_models", "service_id"); has {
+		if err := exec(`ALTER TABLE provider_models RENAME COLUMN service_id TO provider_id`); err != nil {
+			return err
+		}
+	}
+	if has, _ := s.tableExists("service_wires"); has {
+		if hasNew, _ := s.tableExists("provider_wires"); hasNew {
+			// An interrupted migration already created the new (empty) table;
+			// fold the old rows in instead of renaming over it.
+			if err := exec(`INSERT OR IGNORE INTO provider_wires (provider_id, wire)
+				SELECT service_id, wire FROM service_wires`); err != nil {
+				return err
+			}
+			if err := exec(`DROP TABLE service_wires`); err != nil {
+				return err
+			}
+		} else {
+			if err := exec(`ALTER TABLE service_wires RENAME TO provider_wires`); err != nil {
+				return err
+			}
+		}
+	}
+	if has, _ := s.hasColumn("provider_wires", "service_id"); has {
+		if err := exec(`ALTER TABLE provider_wires RENAME COLUMN service_id TO provider_id`); err != nil {
+			return err
+		}
+	}
+	if err := exec(`DROP INDEX IF EXISTS idx_service_models_service`); err != nil {
+		return err
+	}
+	return exec(`DROP INDEX IF EXISTS idx_service_wires_service`)
+}
+
 // foldCredentialPool migrates from the multi-key pool era: each provider keeps
 // its oldest key as providers.api_key (any extra keys are dropped — one key per
 // provider by design), then the pool table is removed.
@@ -300,14 +345,15 @@ func (s *Store) backfillWires() error {
 	return nil
 }
 
-// addColumn adds a column to a table if it is not already present, making
-// schema evolution idempotent without a version table.
-func (s *Store) addColumn(table, col, decl string) error {
+// hasColumn reports whether a table has a column of the given name. A missing
+// table yields (false, nil): PRAGMA table_info returns no rows for it.
+func (s *Store) hasColumn(table, col string) (bool, error) {
 	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {
-		return fmt.Errorf("store: table_info %s: %w", table, err)
+		return false, fmt.Errorf("store: table_info %s: %w", table, err)
 	}
 	defer rows.Close()
+	found := false
 	for rows.Next() {
 		var (
 			cid     int
@@ -318,14 +364,24 @@ func (s *Store) addColumn(table, col, decl string) error {
 			pk      int
 		)
 		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
-			return fmt.Errorf("store: table_info %s: %w", table, err)
+			return false, fmt.Errorf("store: table_info %s: %w", table, err)
 		}
 		if name == col {
-			return nil
+			found = true
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("store: table_info %s: %w", table, err)
+		return false, fmt.Errorf("store: table_info %s: %w", table, err)
+	}
+	return found, nil
+}
+
+// addColumn adds a column to a table if it is not already present, making
+// schema evolution idempotent without a version table.
+func (s *Store) addColumn(table, col, decl string) error {
+	has, err := s.hasColumn(table, col)
+	if err != nil || has {
+		return err
 	}
 	if _, err := s.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, col, decl)); err != nil {
 		return fmt.Errorf("store: add column %s.%s: %w", table, col, err)
