@@ -1,26 +1,49 @@
-import { useState } from 'react';
-import { CheckCircle2, KeyRound, Pencil, Plus, Server, Trash2, XCircle } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import {
+  ArrowLeft,
+  Check,
+  CheckCircle2,
+  KeyRound,
+  Pencil,
+  Plus,
+  Search,
+  Trash2,
+  Wrench,
+  XCircle,
+} from 'lucide-react';
 import { api } from '../api/client';
-import type { Provider, VendorTestResult } from '../api/types';
+import type { CatalogService, CatalogVendor, Provider, VendorTestResult } from '../api/types';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
 import { Modal } from '../components/Modal';
-import { ProviderForm } from '../components/ProviderForm';
+import { ProviderForm, type ProviderPrefill } from '../components/ProviderForm';
 import { Skeleton } from '../components/Skeleton';
 import { useToast } from '../components/Toast';
 import { useFetch } from '../lib/useFetch';
 import { ms, percent } from '../lib/format';
-import styles from './Providers.module.css';
+import styles from './ServiceAdd.module.css';
+
+interface FlatEntry {
+  vendor: CatalogVendor;
+  service: CatalogService;
+}
+
+/** Marker for "open the form without a preset". */
+const CUSTOM: ProviderPrefill = {};
 
 type ModalState =
   | { kind: 'none' }
   | { kind: 'edit'; provider: Provider }
   | { kind: 'delete'; provider: Provider };
 
-export function ProvidersPage() {
-  const { data, error, initialLoading, refetch } = useFetch(() => api.providers(), []);
+export function ServiceAddPage() {
+  const catalog = useFetch(() => api.catalog(), []);
+  const providers = useFetch(() => api.providers(), []);
+  const [query, setQuery] = useState('');
+  const [vendorFilter, setVendorFilter] = useState<string>('all');
+  const [prefill, setPrefill] = useState<ProviderPrefill | null>(null);
   const [modal, setModal] = useState<ModalState>({ kind: 'none' });
   const toast = useToast();
 
@@ -29,7 +52,7 @@ export function ProvidersPage() {
   const onDelete = async (provider: Provider) => {
     try {
       await api.deleteProvider(provider.id);
-      refetch();
+      providers.refetch();
       close();
       toast.success(`Removed "${provider.name}".`);
     } catch (e) {
@@ -37,49 +60,179 @@ export function ProvidersPage() {
     }
   };
 
+  const addedCatalogIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of providers.data ?? []) if (s.catalog_id) set.add(s.catalog_id);
+    return set;
+  }, [providers.data]);
+
+  const entries = useMemo<FlatEntry[]>(() => {
+    const out: FlatEntry[] = [];
+    for (const v of catalog.data?.vendors ?? []) {
+      for (const s of v.services) out.push({ vendor: v, service: s });
+    }
+    return out;
+  }, [catalog.data]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return entries.filter(({ vendor, service }) => {
+      if (vendorFilter !== 'all' && vendor.id !== vendorFilter) return false;
+      if (!q) return true;
+      if (vendor.name.toLowerCase().includes(q)) return true;
+      if (service.name.toLowerCase().includes(q)) return true;
+      if (service.kind.toLowerCase().includes(q)) return true;
+      return service.models.some((m) => m.model.toLowerCase().includes(q));
+    });
+  }, [entries, query, vendorFilter]);
+
+  const openAdd = (vendor: CatalogVendor, service: CatalogService) => {
+    setPrefill({
+      name: service.id,
+      vendor: vendor.name,
+      adapter: service.adapter,
+      base_url: service.base_url,
+      catalog_id: service.id,
+      wires: service.wires,
+      quirks: service.quirks,
+      models: service.models.map((m) => ({
+        model: m.model,
+        input: m.input,
+        output: m.output,
+        cached_input: m.cached_input ?? 0,
+        unit: m.unit,
+      })),
+    });
+  };
+
+  const hasProviders = (providers.data?.length ?? 0) > 0;
+
   return (
     <Page
-      title="Providers"
+      title="Add service"
       actions={
-        <Link to="/providers/new" className="btn btn-primary">
-          <Plus size={15} /> Add provider
+        <Link to="/services" className="btn">
+          <ArrowLeft size={15} /> Back to services
         </Link>
       }
     >
-      {error ? (
-        <ErrorBanner message={error} onRetry={refetch} />
-      ) : initialLoading ? (
-        <div className={styles.list}>
-          {Array.from({ length: 2 }).map((_, i) => (
-            <div key={i} className={`card ${styles.provider}`} style={{ padding: 16 }}>
-              <Skeleton height={20} width={180} />
-              <Skeleton height={14} width="60%" style={{ marginTop: 10 }} />
+      {providers.error ? (
+        <ErrorBanner message={providers.error} onRetry={providers.refetch} />
+      ) : providers.initialLoading ? (
+        <section className={styles.sectionBlock}>
+          <h2 className={styles.sectionHeading}>Configured providers</h2>
+          <div className={styles.list}>
+            {Array.from({ length: 2 }).map((_, i) => (
+              <div key={i} className={`card ${styles.provider}`} style={{ padding: 16 }}>
+                <Skeleton height={20} width={180} />
+                <Skeleton height={14} width="60%" style={{ marginTop: 10 }} />
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : hasProviders ? (
+        <section className={styles.sectionBlock}>
+          <h2 className={styles.sectionHeading}>Configured providers</h2>
+          <div className={styles.list}>
+            {(providers.data ?? []).map((p) => (
+              <ProviderCard
+                key={p.id}
+                provider={p}
+                onChanged={providers.refetch}
+                onEdit={() => setModal({ kind: 'edit', provider: p })}
+                onDelete={() => setModal({ kind: 'delete', provider: p })}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <h2 className={styles.sectionHeading}>{hasProviders ? 'Add another provider' : 'Add a provider'}</h2>
+      <div className={styles.intro}>
+        Pick a preset — endpoint, wires, models, and prices come pre-filled, you just paste your
+        API key — or configure a custom provider from scratch.
+      </div>
+
+      {catalog.error ? (
+        <ErrorBanner message={catalog.error} onRetry={catalog.refetch} />
+      ) : catalog.initialLoading ? (
+        <div className={styles.grid}>
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className={`card ${styles.entry}`} style={{ padding: 16 }}>
+              <Skeleton height={18} width={160} />
+              <Skeleton height={13} width="70%" style={{ marginTop: 10 }} />
             </div>
           ))}
         </div>
-      ) : !data || data.length === 0 ? (
-        <EmptyState
-          icon={Server}
-          title="No providers yet"
-          hint={
-            <>
-              <Link to="/providers/new">Add a provider</Link> — pick a known provider preset or
-              configure a custom endpoint.
-            </>
-          }
-        />
       ) : (
-        <div className={styles.list}>
-          {data.map((p) => (
-            <ProviderCard
-              key={p.id}
-              provider={p}
-              onChanged={refetch}
-              onEdit={() => setModal({ kind: 'edit', provider: p })}
-              onDelete={() => setModal({ kind: 'delete', provider: p })}
-            />
-          ))}
-        </div>
+        <>
+          <div className={styles.controls}>
+            <div className={styles.searchBox}>
+              <Search size={15} />
+              <input
+                className={styles.searchInput}
+                value={query}
+                placeholder="Search presets, models, providers…"
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
+            <div className={styles.facets}>
+              <button
+                className={`${styles.facet} ${vendorFilter === 'all' ? styles.facetActive : ''}`}
+                onClick={() => setVendorFilter('all')}
+              >
+                All
+              </button>
+              {(catalog.data?.vendors ?? []).map((v) => (
+                <button
+                  key={v.id}
+                  className={`${styles.facet} ${vendorFilter === v.id ? styles.facetActive : ''}`}
+                  onClick={() => setVendorFilter(v.id)}
+                >
+                  {v.name}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {filtered.length === 0 && query.trim() !== '' ? (
+            <EmptyState icon={Search} title="No matches" hint="Try a different search or facet." />
+          ) : (
+            <div className={styles.grid}>
+              <button className={`card ${styles.entry} ${styles.custom}`} onClick={() => setPrefill(CUSTOM)}>
+                <div className={styles.customIcon}>
+                  <Wrench size={18} />
+                </div>
+                <span className={styles.serviceName}>Custom provider</span>
+                <span className={styles.note}>
+                  Any OpenAI- or Anthropic-compatible endpoint: set the base URL, key, wires, and
+                  per-model prices yourself.
+                </span>
+              </button>
+              {filtered.map(({ vendor, service }) => (
+                <PresetCard
+                  key={`${vendor.id}/${service.id}`}
+                  vendor={vendor}
+                  service={service}
+                  added={addedCatalogIds.has(service.id)}
+                  onAdd={() => openAdd(vendor, service)}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {prefill && (
+        <ProviderForm
+          prefill={prefill}
+          onClose={() => setPrefill(null)}
+          onSaved={() => {
+            setPrefill(null);
+            providers.refetch();
+            toast.success('Provider added.');
+          }}
+        />
       )}
 
       {modal.kind === 'edit' && (
@@ -87,7 +240,7 @@ export function ProvidersPage() {
           editing={modal.provider}
           onClose={close}
           onSaved={() => {
-            refetch();
+            providers.refetch();
             close();
             toast.success('Provider updated.');
           }}
@@ -116,6 +269,64 @@ export function ProvidersPage() {
         </Modal>
       )}
     </Page>
+  );
+}
+
+interface PresetCardProps {
+  vendor: CatalogVendor;
+  service: CatalogService;
+  added: boolean;
+  onAdd: () => void;
+}
+
+function PresetCard({ vendor, service, added, onAdd }: PresetCardProps) {
+  const shown = service.models.slice(0, 4);
+  return (
+    <div className={`card ${styles.entry}`}>
+      <div className={styles.entryHead}>
+        <div className={styles.entryTitle}>
+          <span className={styles.vendorName}>{vendor.name}</span>
+          <span className={styles.serviceName}>{service.name}</span>
+        </div>
+        {added && (
+          <span className={styles.addedChip}>
+            <Check size={12} /> Added
+          </span>
+        )}
+      </div>
+
+      <div className={styles.tags}>
+        <span className="chip">{service.kind}</span>
+        <span className="chip">{service.adapter}</span>
+      </div>
+
+      <div className={styles.baseUrl}>{service.base_url}</div>
+      {service.note && <div className={styles.note}>{service.note}</div>}
+
+      <div className={styles.models}>
+        {shown.map((m) => (
+          <span key={m.model} className="chip chip-mono">
+            {m.model}
+          </span>
+        ))}
+        {service.models.length > shown.length && (
+          <span className="chip">+{service.models.length - shown.length}</span>
+        )}
+      </div>
+
+      <div className={styles.entryFoot}>
+        {service.docs ? (
+          <a className={styles.docs} href={service.docs} target="_blank" rel="noreferrer">
+            Docs
+          </a>
+        ) : (
+          <span />
+        )}
+        <button className="btn btn-sm btn-primary" onClick={onAdd}>
+          <Plus size={13} /> Add provider
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -183,7 +394,7 @@ function ProviderCard({ provider, onChanged, onEdit, onDelete }: ProviderCardPro
               </span>
             )}
           </div>
-          <div className={styles.baseUrl}>{provider.base_url}</div>
+          <div className={styles.providerBaseUrl}>{provider.base_url}</div>
         </div>
         <div className={styles.headRight}>
           <button className="btn btn-sm" onClick={runTest} disabled={testing}>

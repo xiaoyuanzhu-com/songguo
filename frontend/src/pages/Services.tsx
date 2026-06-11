@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown, ChevronRight, Layers } from 'lucide-react';
+import { ChevronDown, ChevronRight, Layers, Plus } from 'lucide-react';
 import { api } from '../api/client';
 import type { Service } from '../api/types';
 import { EmptyState } from '../components/EmptyState';
@@ -15,7 +15,14 @@ export function ServicesPage() {
   const { data, error, initialLoading, refetch } = useFetch(() => api.services(), []);
 
   return (
-    <Page title="Services">
+    <Page
+      title="Services"
+      actions={
+        <Link to="/services/add" className="btn btn-primary">
+          <Plus size={15} /> Add service
+        </Link>
+      }
+    >
       {error ? (
         <ErrorBanner message={error} onRetry={refetch} />
       ) : initialLoading ? (
@@ -30,7 +37,7 @@ export function ServicesPage() {
           title="No services yet"
           hint={
             <>
-              <Link to="/providers/new">Add a provider</Link> to start routing models.
+              <Link to="/services/add">Add a provider</Link> to start routing models.
             </>
           }
         />
