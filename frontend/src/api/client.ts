@@ -3,12 +3,13 @@ import type {
   CallsPage,
   CallTrace,
   Catalog,
-  CreateServiceBody,
+  CreateProviderBody,
   CreateTokenBody,
   Overview,
-  PatchServiceBody,
+  PatchProviderBody,
   PatchTokenBody,
   PricingRow,
+  Provider,
   Service,
   Settings,
   Token,
@@ -164,30 +165,34 @@ export const api = {
       method: 'POST',
     }),
 
-  // --- Services (SQLite-backed config) ---
+  // --- Services (auto-derived, model-centric) ---
 
   services: () => request<Service[]>('/services'),
 
-  createService: (body: CreateServiceBody) =>
-    request<Service>('/services', { method: 'POST', body: JSON.stringify(body) }),
+  // --- Providers (SQLite-backed upstream config) ---
 
-  patchService: (id: string, body: PatchServiceBody) =>
-    request<Service>(`/services/${encodeURIComponent(id)}`, {
+  providers: () => request<Provider[]>('/providers'),
+
+  createProvider: (body: CreateProviderBody) =>
+    request<Provider>('/providers', { method: 'POST', body: JSON.stringify(body) }),
+
+  patchProvider: (id: string, body: PatchProviderBody) =>
+    request<Provider>(`/providers/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify(body),
     }),
 
-  deleteService: (id: string) =>
-    request<void>(`/services/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  deleteProvider: (id: string) =>
+    request<void>(`/providers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
-  testService: (id: string) =>
-    request<VendorTestResult>(`/services/${encodeURIComponent(id)}/test`, {
+  testProvider: (id: string) =>
+    request<VendorTestResult>(`/providers/${encodeURIComponent(id)}/test`, {
       method: 'POST',
     }),
 
   catalog: () => request<Catalog>('/catalog'),
 
-  /** All registered wire names (for the service form's allowlist picker). */
+  /** All registered wire names (for the provider form's allowlist picker). */
   wires: () => request<string[]>('/wires'),
 
   pricing: () => request<PricingRow[]>('/pricing'),

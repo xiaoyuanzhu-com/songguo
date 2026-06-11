@@ -8,14 +8,14 @@ import (
 	"time"
 )
 
-// Service is one configured upstream: an adapter speaking a wire protocol, a
+// Provider is one configured upstream: an adapter speaking a wire protocol, a
 // base URL, a single API key, and the models it serves with their per-model
 // prices. It is the SQLite-backed successor to the file-based vendor config;
-// the config manager projects each enabled, complete service into a
+// the config manager projects each enabled, complete provider into a
 // config.Vendor for routing. The key is stored plaintext at rest (it must be
 // replayed upstream, so it cannot be hashed); it is never serialized to the
 // API in the clear, only masked.
-type Service struct {
+type Provider struct {
 	ID        string
 	Name      string
 	Vendor    string // catalog vendor grouping, for display only
@@ -32,14 +32,14 @@ type Service struct {
 	Quirks         map[string]string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
-	Models         []ServiceModel
+	Models         []ProviderModel
 	Wires          []string
 }
 
-// ServiceModel is a model a service serves, with its true per-model price.
+// ProviderModel is a model a provider serves, with its true per-model price.
 // CachedInput is the rate for cache-hit input tokens; 0 means "charge the full
 // Input rate" (no cache discount).
-type ServiceModel struct {
+type ProviderModel struct {
 	Model       string
 	Input       float64
 	Output      float64
@@ -47,8 +47,8 @@ type ServiceModel struct {
 	Unit        string
 }
 
-// NewService describes a service to create. APIKey carries the plaintext key.
-type NewService struct {
+// NewProvider describes a provider to create. APIKey carries the plaintext key.
+type NewProvider struct {
 	Name           string
 	Vendor         string
 	Adapter        string
@@ -60,13 +60,13 @@ type NewService struct {
 	AllowUnmatched bool
 	Quirks         map[string]string
 	APIKey         string
-	Models         []ServiceModel
+	Models         []ProviderModel
 	Wires          []string
 }
 
-// ServiceUpdate carries optional scalar updates; nil pointers leave a field
+// ProviderUpdate carries optional scalar updates; nil pointers leave a field
 // unchanged. When Models or Wires is non-nil it fully replaces that set.
-type ServiceUpdate struct {
+type ProviderUpdate struct {
 	Name           *string
 	Vendor         *string
 	Adapter        *string
@@ -77,7 +77,7 @@ type ServiceUpdate struct {
 	AllowUnmatched *bool
 	APIKey         *string
 	Quirks         *map[string]string
-	Models         []ServiceModel
+	Models         []ProviderModel
 	Wires          []string
 }
 
@@ -88,211 +88,211 @@ type AppSettings struct {
 	CaptureRetain   int
 }
 
-// CountServices returns the number of configured services.
-func (s *Store) CountServices() (int, error) {
+// CountProviders returns the number of configured providers.
+func (s *Store) CountProviders() (int, error) {
 	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM services`).Scan(&n); err != nil {
-		return 0, fmt.Errorf("store: count services: %w", err)
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM providers`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count providers: %w", err)
 	}
 	return n, nil
 }
 
-// ListServices returns all services, newest first, each with its models and
-// wires assembled. It uses bulk queries rather than per-service follow-ups.
-func (s *Store) ListServices() ([]Service, error) {
+// ListProviders returns all providers, newest first, each with its models and
+// wires assembled. It uses bulk queries rather than per-provider follow-ups.
+func (s *Store) ListProviders() ([]Provider, error) {
 	rows, err := s.db.Query(`SELECT id, name, vendor, adapter, base_url, priority, weight, enabled, catalog_id, api_key, allow_unmatched, quirks, created_at, updated_at
-		FROM services ORDER BY created_at DESC, id`)
+		FROM providers ORDER BY created_at DESC, id`)
 	if err != nil {
-		return nil, fmt.Errorf("store: list services: %w", err)
+		return nil, fmt.Errorf("store: list providers: %w", err)
 	}
 	defer rows.Close()
 
-	var svcs []Service
+	var pvds []Provider
 	index := make(map[string]int)
 	for rows.Next() {
-		svc, err := scanService(rows)
+		pvd, err := scanProvider(rows)
 		if err != nil {
-			return nil, fmt.Errorf("store: scan service: %w", err)
+			return nil, fmt.Errorf("store: scan provider: %w", err)
 		}
-		index[svc.ID] = len(svcs)
-		svcs = append(svcs, svc)
+		index[pvd.ID] = len(pvds)
+		pvds = append(pvds, pvd)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: list services: %w", err)
+		return nil, fmt.Errorf("store: list providers: %w", err)
 	}
-	if len(svcs) == 0 {
+	if len(pvds) == 0 {
 		return nil, nil
 	}
 
-	modelRows, err := s.db.Query(`SELECT service_id, model, input, output, cached_input, unit FROM service_models ORDER BY model`)
+	modelRows, err := s.db.Query(`SELECT provider_id, model, input, output, cached_input, unit FROM provider_models ORDER BY model`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list models: %w", err)
 	}
 	defer modelRows.Close()
 	for modelRows.Next() {
 		var (
-			m   ServiceModel
-			sid string
+			m   ProviderModel
+			pid string
 		)
-		if err := modelRows.Scan(&sid, &m.Model, &m.Input, &m.Output, &m.CachedInput, &m.Unit); err != nil {
+		if err := modelRows.Scan(&pid, &m.Model, &m.Input, &m.Output, &m.CachedInput, &m.Unit); err != nil {
 			return nil, fmt.Errorf("store: scan model: %w", err)
 		}
-		if i, ok := index[sid]; ok {
-			svcs[i].Models = append(svcs[i].Models, m)
+		if i, ok := index[pid]; ok {
+			pvds[i].Models = append(pvds[i].Models, m)
 		}
 	}
 	if err := modelRows.Err(); err != nil {
 		return nil, fmt.Errorf("store: list models: %w", err)
 	}
 
-	wireRows, err := s.db.Query(`SELECT service_id, wire FROM service_wires ORDER BY wire`)
+	wireRows, err := s.db.Query(`SELECT provider_id, wire FROM provider_wires ORDER BY wire`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list wires: %w", err)
 	}
 	defer wireRows.Close()
 	for wireRows.Next() {
-		var sid, w string
-		if err := wireRows.Scan(&sid, &w); err != nil {
+		var pid, w string
+		if err := wireRows.Scan(&pid, &w); err != nil {
 			return nil, fmt.Errorf("store: scan wire: %w", err)
 		}
-		if i, ok := index[sid]; ok {
-			svcs[i].Wires = append(svcs[i].Wires, w)
+		if i, ok := index[pid]; ok {
+			pvds[i].Wires = append(pvds[i].Wires, w)
 		}
 	}
 	if err := wireRows.Err(); err != nil {
 		return nil, fmt.Errorf("store: list wires: %w", err)
 	}
 
-	return svcs, nil
+	return pvds, nil
 }
 
-// GetService returns one service with its models and wires.
-func (s *Store) GetService(id string) (Service, error) {
+// GetProvider returns one provider with its models and wires.
+func (s *Store) GetProvider(id string) (Provider, error) {
 	row := s.db.QueryRow(`SELECT id, name, vendor, adapter, base_url, priority, weight, enabled, catalog_id, api_key, allow_unmatched, quirks, created_at, updated_at
-		FROM services WHERE id = ?`, id)
-	svc, err := scanService(row)
+		FROM providers WHERE id = ?`, id)
+	pvd, err := scanProvider(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Service{}, fmt.Errorf("store: service %q: %w", id, ErrNotFound)
+		return Provider{}, fmt.Errorf("store: provider %q: %w", id, ErrNotFound)
 	}
 	if err != nil {
-		return Service{}, fmt.Errorf("store: get service: %w", err)
+		return Provider{}, fmt.Errorf("store: get provider: %w", err)
 	}
 
-	modelRows, err := s.db.Query(`SELECT model, input, output, cached_input, unit FROM service_models WHERE service_id = ? ORDER BY model`, id)
+	modelRows, err := s.db.Query(`SELECT model, input, output, cached_input, unit FROM provider_models WHERE provider_id = ? ORDER BY model`, id)
 	if err != nil {
-		return Service{}, fmt.Errorf("store: get models: %w", err)
+		return Provider{}, fmt.Errorf("store: get models: %w", err)
 	}
 	defer modelRows.Close()
 	for modelRows.Next() {
-		var m ServiceModel
+		var m ProviderModel
 		if err := modelRows.Scan(&m.Model, &m.Input, &m.Output, &m.CachedInput, &m.Unit); err != nil {
-			return Service{}, fmt.Errorf("store: scan model: %w", err)
+			return Provider{}, fmt.Errorf("store: scan model: %w", err)
 		}
-		svc.Models = append(svc.Models, m)
+		pvd.Models = append(pvd.Models, m)
 	}
 	if err := modelRows.Err(); err != nil {
-		return Service{}, fmt.Errorf("store: get models: %w", err)
+		return Provider{}, fmt.Errorf("store: get models: %w", err)
 	}
 
-	wireRows, err := s.db.Query(`SELECT wire FROM service_wires WHERE service_id = ? ORDER BY wire`, id)
+	wireRows, err := s.db.Query(`SELECT wire FROM provider_wires WHERE provider_id = ? ORDER BY wire`, id)
 	if err != nil {
-		return Service{}, fmt.Errorf("store: get wires: %w", err)
+		return Provider{}, fmt.Errorf("store: get wires: %w", err)
 	}
 	defer wireRows.Close()
 	for wireRows.Next() {
 		var w string
 		if err := wireRows.Scan(&w); err != nil {
-			return Service{}, fmt.Errorf("store: scan wire: %w", err)
+			return Provider{}, fmt.Errorf("store: scan wire: %w", err)
 		}
-		svc.Wires = append(svc.Wires, w)
+		pvd.Wires = append(pvd.Wires, w)
 	}
 	if err := wireRows.Err(); err != nil {
-		return Service{}, fmt.Errorf("store: get wires: %w", err)
+		return Provider{}, fmt.Errorf("store: get wires: %w", err)
 	}
 
-	return svc, nil
+	return pvd, nil
 }
 
-// scanService reads the scalar service columns from a row.
-func scanService(sc interface{ Scan(...any) error }) (Service, error) {
+// scanProvider reads the scalar provider columns from a row.
+func scanProvider(sc interface{ Scan(...any) error }) (Provider, error) {
 	var (
-		svc            Service
+		pvd            Provider
 		enabled        int64
 		allowUnmatched int64
 		quirks         string
 		createdAt      int64
 		updatedAt      int64
 	)
-	if err := sc.Scan(&svc.ID, &svc.Name, &svc.Vendor, &svc.Adapter, &svc.BaseURL,
-		&svc.Priority, &svc.Weight, &enabled, &svc.CatalogID, &svc.APIKey, &allowUnmatched, &quirks, &createdAt, &updatedAt); err != nil {
-		return Service{}, err
+	if err := sc.Scan(&pvd.ID, &pvd.Name, &pvd.Vendor, &pvd.Adapter, &pvd.BaseURL,
+		&pvd.Priority, &pvd.Weight, &enabled, &pvd.CatalogID, &pvd.APIKey, &allowUnmatched, &quirks, &createdAt, &updatedAt); err != nil {
+		return Provider{}, err
 	}
-	svc.Enabled = enabled != 0
-	svc.AllowUnmatched = allowUnmatched != 0
+	pvd.Enabled = enabled != 0
+	pvd.AllowUnmatched = allowUnmatched != 0
 	if quirks != "" {
-		if err := json.Unmarshal([]byte(quirks), &svc.Quirks); err != nil {
-			return Service{}, fmt.Errorf("decode quirks: %w", err)
+		if err := json.Unmarshal([]byte(quirks), &pvd.Quirks); err != nil {
+			return Provider{}, fmt.Errorf("decode quirks: %w", err)
 		}
 	}
-	svc.CreatedAt = time.Unix(createdAt, 0)
-	svc.UpdatedAt = time.Unix(updatedAt, 0)
-	return svc, nil
+	pvd.CreatedAt = time.Unix(createdAt, 0)
+	pvd.UpdatedAt = time.Unix(updatedAt, 0)
+	return pvd, nil
 }
 
-// CreateService inserts a service plus its models and wires in one transaction
+// CreateProvider inserts a provider plus its models and wires in one transaction
 // and returns the assembled row.
-func (s *Store) CreateService(ns NewService) (Service, error) {
+func (s *Store) CreateProvider(np NewProvider) (Provider, error) {
 	id, err := randID()
 	if err != nil {
-		return Service{}, err
+		return Provider{}, err
 	}
-	weight := ns.Weight
+	weight := np.Weight
 	if weight <= 0 {
 		weight = 1
 	}
-	adapter := ns.Adapter
+	adapter := np.Adapter
 	if adapter == "" {
 		adapter = "openai-compatible"
 	}
-	quirks, err := encodeQuirks(ns.Quirks)
+	quirks, err := encodeQuirks(np.Quirks)
 	if err != nil {
-		return Service{}, err
+		return Provider{}, err
 	}
 	now := time.Now()
 
 	tx, err := s.db.Begin()
 	if err != nil {
-		return Service{}, fmt.Errorf("store: begin: %w", err)
+		return Provider{}, fmt.Errorf("store: begin: %w", err)
 	}
 	defer tx.Rollback()
 
-	_, err = tx.Exec(`INSERT INTO services (id, name, vendor, adapter, base_url, priority, weight, enabled, catalog_id, api_key, allow_unmatched, quirks, created_at, updated_at)
+	_, err = tx.Exec(`INSERT INTO providers (id, name, vendor, adapter, base_url, priority, weight, enabled, catalog_id, api_key, allow_unmatched, quirks, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, ns.Name, ns.Vendor, adapter, ns.BaseURL, ns.Priority, weight, boolToInt(ns.Enabled), ns.CatalogID, ns.APIKey, boolToInt(ns.AllowUnmatched), quirks, now.Unix(), now.Unix())
+		id, np.Name, np.Vendor, adapter, np.BaseURL, np.Priority, weight, boolToInt(np.Enabled), np.CatalogID, np.APIKey, boolToInt(np.AllowUnmatched), quirks, now.Unix(), now.Unix())
 	if err != nil {
-		return Service{}, fmt.Errorf("store: insert service: %w", err)
+		return Provider{}, fmt.Errorf("store: insert provider: %w", err)
 	}
 
-	if err := insertModels(tx, id, ns.Models); err != nil {
-		return Service{}, err
+	if err := insertModels(tx, id, np.Models); err != nil {
+		return Provider{}, err
 	}
 
-	if err := insertWires(tx, id, ns.Wires); err != nil {
-		return Service{}, err
+	if err := insertWires(tx, id, np.Wires); err != nil {
+		return Provider{}, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return Service{}, fmt.Errorf("store: commit: %w", err)
+		return Provider{}, fmt.Errorf("store: commit: %w", err)
 	}
-	return s.GetService(id)
+	return s.GetProvider(id)
 }
 
-// UpdateService applies the non-nil scalar fields and, when Models or Wires is
-// non-nil, replaces that set. It returns the updated service.
-func (s *Store) UpdateService(id string, upd ServiceUpdate) (Service, error) {
+// UpdateProvider applies the non-nil scalar fields and, when Models or Wires is
+// non-nil, replaces that set. It returns the updated provider.
+func (s *Store) UpdateProvider(id string, upd ProviderUpdate) (Provider, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return Service{}, fmt.Errorf("store: begin: %w", err)
+		return Provider{}, fmt.Errorf("store: begin: %w", err)
 	}
 	defer tx.Rollback()
 
@@ -343,7 +343,7 @@ func (s *Store) UpdateService(id string, upd ServiceUpdate) (Service, error) {
 	if upd.Quirks != nil {
 		quirks, err := encodeQuirks(*upd.Quirks)
 		if err != nil {
-			return Service{}, err
+			return Provider{}, err
 		}
 		sets = append(sets, "quirks = ?")
 		args = append(args, quirks)
@@ -353,7 +353,7 @@ func (s *Store) UpdateService(id string, upd ServiceUpdate) (Service, error) {
 	sets = append(sets, "updated_at = ?")
 	args = append(args, time.Now().Unix())
 
-	query := "UPDATE services SET " + sets[0]
+	query := "UPDATE providers SET " + sets[0]
 	for _, st := range sets[1:] {
 		query += ", " + st
 	}
@@ -362,44 +362,44 @@ func (s *Store) UpdateService(id string, upd ServiceUpdate) (Service, error) {
 
 	res, err := tx.Exec(query, args...)
 	if err != nil {
-		return Service{}, fmt.Errorf("store: update service: %w", err)
+		return Provider{}, fmt.Errorf("store: update provider: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return Service{}, fmt.Errorf("store: service %q: %w", id, ErrNotFound)
+		return Provider{}, fmt.Errorf("store: provider %q: %w", id, ErrNotFound)
 	}
 
 	if upd.Models != nil {
-		if _, err := tx.Exec(`DELETE FROM service_models WHERE service_id = ?`, id); err != nil {
-			return Service{}, fmt.Errorf("store: clear models: %w", err)
+		if _, err := tx.Exec(`DELETE FROM provider_models WHERE provider_id = ?`, id); err != nil {
+			return Provider{}, fmt.Errorf("store: clear models: %w", err)
 		}
 		if err := insertModels(tx, id, upd.Models); err != nil {
-			return Service{}, err
+			return Provider{}, err
 		}
 	}
 
 	if upd.Wires != nil {
-		if _, err := tx.Exec(`DELETE FROM service_wires WHERE service_id = ?`, id); err != nil {
-			return Service{}, fmt.Errorf("store: clear wires: %w", err)
+		if _, err := tx.Exec(`DELETE FROM provider_wires WHERE provider_id = ?`, id); err != nil {
+			return Provider{}, fmt.Errorf("store: clear wires: %w", err)
 		}
 		if err := insertWires(tx, id, upd.Wires); err != nil {
-			return Service{}, err
+			return Provider{}, err
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return Service{}, fmt.Errorf("store: commit: %w", err)
+		return Provider{}, fmt.Errorf("store: commit: %w", err)
 	}
-	return s.GetService(id)
+	return s.GetProvider(id)
 }
 
-// DeleteService removes a service; its models and wires cascade.
-func (s *Store) DeleteService(id string) error {
-	res, err := s.db.Exec(`DELETE FROM services WHERE id = ?`, id)
+// DeleteProvider removes a provider; its models and wires cascade.
+func (s *Store) DeleteProvider(id string) error {
+	res, err := s.db.Exec(`DELETE FROM providers WHERE id = ?`, id)
 	if err != nil {
-		return fmt.Errorf("store: delete service: %w", err)
+		return fmt.Errorf("store: delete provider: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("store: service %q: %w", id, ErrNotFound)
+		return fmt.Errorf("store: provider %q: %w", id, ErrNotFound)
 	}
 	return nil
 }
@@ -431,8 +431,8 @@ func (s *Store) UpdateAppSettings(as AppSettings) error {
 	return nil
 }
 
-// insertModels writes a service's model rows within a transaction.
-func insertModels(tx *sql.Tx, serviceID string, models []ServiceModel) error {
+// insertModels writes a provider's model rows within a transaction.
+func insertModels(tx *sql.Tx, providerID string, models []ProviderModel) error {
 	for _, m := range models {
 		if m.Model == "" {
 			continue
@@ -441,22 +441,22 @@ func insertModels(tx *sql.Tx, serviceID string, models []ServiceModel) error {
 		if unit == "" {
 			unit = "per_1m_tokens"
 		}
-		if _, err := tx.Exec(`INSERT OR REPLACE INTO service_models (service_id, model, input, output, cached_input, unit) VALUES (?, ?, ?, ?, ?, ?)`,
-			serviceID, m.Model, m.Input, m.Output, m.CachedInput, unit); err != nil {
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO provider_models (provider_id, model, input, output, cached_input, unit) VALUES (?, ?, ?, ?, ?, ?)`,
+			providerID, m.Model, m.Input, m.Output, m.CachedInput, unit); err != nil {
 			return fmt.Errorf("store: insert model: %w", err)
 		}
 	}
 	return nil
 }
 
-// insertWires writes a service's wire-allowlist rows within a transaction.
-func insertWires(tx *sql.Tx, serviceID string, wires []string) error {
+// insertWires writes a provider's wire-allowlist rows within a transaction.
+func insertWires(tx *sql.Tx, providerID string, wires []string) error {
 	for _, w := range wires {
 		if w == "" {
 			continue
 		}
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO service_wires (service_id, wire) VALUES (?, ?)`,
-			serviceID, w); err != nil {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO provider_wires (provider_id, wire) VALUES (?, ?)`,
+			providerID, w); err != nil {
 			return fmt.Errorf("store: insert wire: %w", err)
 		}
 	}

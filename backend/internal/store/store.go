@@ -67,21 +67,37 @@ func (s *Store) Close() error {
 // migrate creates tables and indexes if they do not already exist. It is safe
 // to call repeatedly.
 func (s *Store) migrate() error {
-	// Detect whether service_wires predates this run: if the table is being
-	// created now on a database that already has services, those services were
-	// configured before wire allowlists existed and must be backfilled or they
-	// would deny all traffic.
-	hadWires, err := s.tableExists("service_wires")
-	if err != nil {
-		return err
-	}
-	// service_credentials predates the one-key-per-service model; when present
-	// the oldest key is folded into services.api_key and the table dropped.
-	hadCredPool, err := s.tableExists("service_credentials")
-	if err != nil {
-		return err
+	// Detect pre-rename tables before creating the new ones.
+	hasOldServices, _ := s.tableExists("services")
+	hasOldWires, _ := s.tableExists("service_wires")
+	hadCredPool, _ := s.tableExists("service_credentials")
+	// Detect whether provider_wires already existed before this migrate run
+	// (either from a previous run with new names, or via rename from service_wires).
+	hadProviderWires, _ := s.tableExists("provider_wires")
+
+	// Step 1: Rename legacy tables services → providers, etc.
+	// Must run before CREATE TABLE so old tables are gone when new ones are created.
+	if hasOldServices {
+		s.db.Exec(`PRAGMA legacy_alter_table=ON`)
+		renameStmts := []string{
+			`ALTER TABLE services RENAME TO providers`,
+			`ALTER TABLE service_models RENAME TO provider_models`,
+			`ALTER TABLE service_models RENAME COLUMN service_id TO provider_id`,
+			`ALTER TABLE service_wires RENAME TO provider_wires`,
+			`ALTER TABLE service_wires RENAME COLUMN service_id TO provider_id`,
+			`DROP INDEX IF EXISTS idx_service_models_service`,
+			`DROP INDEX IF EXISTS idx_service_wires_service`,
+		}
+		for _, stmt := range renameStmts {
+			if _, err := s.db.Exec(stmt); err != nil {
+				return fmt.Errorf("store: rename services→providers: %w", err)
+			}
+		}
+		s.db.Exec(`PRAGMA legacy_alter_table=OFF`)
 	}
 
+	// Step 2: Create tables (new names). IF NOT EXISTS means this is safe for
+	// fresh databases and for databases that just went through the rename.
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS tokens (
 			id         TEXT PRIMARY KEY,
@@ -130,12 +146,11 @@ func (s *Store) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_calls_vendor ON calls(vendor)`,
 		`CREATE INDEX IF NOT EXISTS idx_calls_status ON calls(status)`,
 
-		// Vendor/service config lives in SQLite (managed from the dashboard),
-		// Vendor/service config lives in SQLite (managed from the dashboard),
-		// the source of truth for routing. A service
+		// Provider config lives in SQLite (managed from the dashboard),
+		// the source of truth for routing. A provider
 		// is one configured upstream: an adapter + base_url + a single API key +
 		// the models it serves with their per-model prices.
-		`CREATE TABLE IF NOT EXISTS services (
+		`CREATE TABLE IF NOT EXISTS providers (
 			id          TEXT PRIMARY KEY,
 			name        TEXT NOT NULL UNIQUE,
 			vendor      TEXT NOT NULL DEFAULT '',
@@ -149,24 +164,24 @@ func (s *Store) migrate() error {
 			created_at  INTEGER NOT NULL,
 			updated_at  INTEGER NOT NULL
 		)`,
-		`CREATE TABLE IF NOT EXISTS service_models (
-			service_id  TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+		`CREATE TABLE IF NOT EXISTS provider_models (
+			provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
 			model       TEXT NOT NULL,
 			input       REAL NOT NULL DEFAULT 0,
 			output      REAL NOT NULL DEFAULT 0,
 			unit        TEXT NOT NULL DEFAULT 'per_1m_tokens',
-			PRIMARY KEY (service_id, model)
+			PRIMARY KEY (provider_id, model)
 		)`,
-		// Per-service wire allowlist: which wire-protocol entries (path pattern +
-		// usage extractor, see internal/wire) the proxy may serve for a service.
+		// Per-provider wire allowlist: which wire-protocol entries (path pattern +
+		// usage extractor, see internal/wire) the proxy may serve for a provider.
 		// Paths matching no enabled wire are denied unless allow_unmatched is set.
-		`CREATE TABLE IF NOT EXISTS service_wires (
-			service_id  TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+		`CREATE TABLE IF NOT EXISTS provider_wires (
+			provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
 			wire        TEXT NOT NULL,
-			PRIMARY KEY (service_id, wire)
+			PRIMARY KEY (provider_id, wire)
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_service_models_service ON service_models(service_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_service_wires_service ON service_wires(service_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_provider_models_provider ON provider_models(provider_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_provider_wires_provider ON provider_wires(provider_id)`,
 
 		// Gateway-wide settings as a singleton row, hot-applied via the config
 		// manager when changed from the dashboard.
@@ -184,15 +199,15 @@ func (s *Store) migrate() error {
 		}
 	}
 
-	// Post-v1 columns live here rather than in the CREATE statements so the
-	// same path serves fresh and pre-existing databases.
+	// Step 3: Add post-v1 columns. These live here rather than in the CREATE
+	// statements so the same path serves fresh and pre-existing databases.
 	adds := []struct{ table, col, decl string }{
 		{"calls", "wire", "TEXT NOT NULL DEFAULT ''"},
 		{"calls", "confidence", "TEXT NOT NULL DEFAULT ''"},
-		{"services", "allow_unmatched", "INTEGER NOT NULL DEFAULT 0"},
-		{"services", "quirks", "TEXT NOT NULL DEFAULT '{}'"},
-		{"services", "api_key", "TEXT NOT NULL DEFAULT ''"},
-		{"service_models", "cached_input", "REAL NOT NULL DEFAULT 0"},
+		{"providers", "allow_unmatched", "INTEGER NOT NULL DEFAULT 0"},
+		{"providers", "quirks", "TEXT NOT NULL DEFAULT '{}'"},
+		{"providers", "api_key", "TEXT NOT NULL DEFAULT ''"},
+		{"provider_models", "cached_input", "REAL NOT NULL DEFAULT 0"},
 	}
 	for _, a := range adds {
 		if err := s.addColumn(a.table, a.col, a.decl); err != nil {
@@ -200,13 +215,19 @@ func (s *Store) migrate() error {
 		}
 	}
 
+	// Step 4: Legacy migrations that only run on older databases.
 	if hadCredPool {
 		if err := s.foldCredentialPool(); err != nil {
 			return err
 		}
 	}
 
-	if !hadWires {
+	// Backfill wires only if neither provider_wires nor service_wires existed
+	// before this migrate call (fresh DB or pre-wire-era DB). If either table
+	// already existed — even if wire rows were manually deleted — we don't
+	// re-add them. INSERT OR IGNORE makes the actual inserts idempotent anyway,
+	// but skipping the work is cleaner.
+	if !hadProviderWires && !hasOldWires {
 		if err := s.backfillWires(); err != nil {
 			return err
 		}
@@ -214,13 +235,13 @@ func (s *Store) migrate() error {
 	return nil
 }
 
-// foldCredentialPool migrates from the multi-key pool era: each service keeps
-// its oldest key as services.api_key (any extra keys are dropped — one key per
-// service by design), then the pool table is removed.
+// foldCredentialPool migrates from the multi-key pool era: each provider keeps
+// its oldest key as providers.api_key (any extra keys are dropped — one key per
+// provider by design), then the pool table is removed.
 func (s *Store) foldCredentialPool() error {
-	if _, err := s.db.Exec(`UPDATE services SET api_key = COALESCE(
+	if _, err := s.db.Exec(`UPDATE providers SET api_key = COALESCE(
 			(SELECT sc.api_key FROM service_credentials sc
-			 WHERE sc.service_id = services.id
+			 WHERE sc.service_id = providers.id
 			 ORDER BY sc.created_at, sc.id LIMIT 1), '')
 		WHERE api_key = ''`); err != nil {
 		return fmt.Errorf("store: fold credential pool: %w", err)
@@ -240,15 +261,15 @@ func (s *Store) tableExists(name string) (bool, error) {
 	return n > 0, nil
 }
 
-// backfillWires grants pre-wire-era services the default allowlist for their
+// backfillWires grants pre-wire-era providers the default allowlist for their
 // adapter (names must stay in sync with internal/wire registrations). Runs
-// only on the migration that introduces service_wires.
+// only on the migration that introduces provider_wires.
 func (s *Store) backfillWires() error {
 	defaults := map[string][]string{
 		"anthropic-compatible": {"anthropic/messages", "anthropic/models"},
 		"":                     {"openai/chat", "openai/completions", "openai/embeddings", "openai/models"},
 	}
-	rows, err := s.db.Query(`SELECT id, adapter FROM services`)
+	rows, err := s.db.Query(`SELECT id, adapter FROM providers`)
 	if err != nil {
 		return fmt.Errorf("store: backfill wires: %w", err)
 	}
@@ -271,7 +292,7 @@ func (s *Store) backfillWires() error {
 			wires = defaults[""]
 		}
 		for _, w := range wires {
-			if _, err := s.db.Exec(`INSERT OR IGNORE INTO service_wires (service_id, wire) VALUES (?, ?)`, v.id, w); err != nil {
+			if _, err := s.db.Exec(`INSERT OR IGNORE INTO provider_wires (provider_id, wire) VALUES (?, ?)`, v.id, w); err != nil {
 				return fmt.Errorf("store: backfill wires: %w", err)
 			}
 		}

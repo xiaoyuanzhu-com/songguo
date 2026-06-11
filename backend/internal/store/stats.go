@@ -31,6 +31,13 @@ type VendorStat struct {
 	LastStatus int     // status of the most recent row for this vendor
 }
 
+// ModelStat holds per-model request/error counts and average latency.
+type ModelStat struct {
+	Requests   int
+	Errors     int
+	AvgLatency float64 // milliseconds
+}
+
 // windowClause builds the optional "[since, until)" WHERE clause shared by the
 // stats queries.
 func windowClause(since, until *time.Time) (string, []any) {
@@ -163,6 +170,42 @@ func (s *Store) VendorStats(since, until *time.Time) (map[string]VendorStat, err
 		return nil, fmt.Errorf("store: vendor last status: %w", err)
 	}
 
+	return out, nil
+}
+
+// ModelStats returns per-model request/error counts and average latency over
+// the optional [since, until) window. The map is keyed by model name; models
+// with no rows in the window are absent.
+func (s *Store) ModelStats(since, until *time.Time) (map[string]ModelStat, error) {
+	clause, args := windowClause(since, until)
+
+	rows, err := s.db.Query(
+		`SELECT model,
+		        COUNT(*),
+		        SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END),
+		        COALESCE(AVG(latency_ms), 0)
+		   FROM calls`+clause+`
+		  GROUP BY model`,
+		args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: model stats: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]ModelStat)
+	for rows.Next() {
+		var (
+			model string
+			stat  ModelStat
+		)
+		if err := rows.Scan(&model, &stat.Requests, &stat.Errors, &stat.AvgLatency); err != nil {
+			return nil, fmt.Errorf("store: scan model stats: %w", err)
+		}
+		out[model] = stat
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: model stats: %w", err)
+	}
 	return out, nil
 }
 

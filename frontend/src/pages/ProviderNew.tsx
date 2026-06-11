@@ -6,11 +6,11 @@ import type { CatalogService, CatalogVendor } from '../api/types';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { EmptyState } from '../components/EmptyState';
 import { Page } from '../components/Layout';
-import { ServiceForm, type ServicePrefill } from '../components/ServiceForm';
+import { ProviderForm, type ProviderPrefill } from '../components/ProviderForm';
 import { Skeleton } from '../components/Skeleton';
 import { useToast } from '../components/Toast';
 import { useFetch } from '../lib/useFetch';
-import styles from './ServiceNew.module.css';
+import styles from './ProviderNew.module.css';
 
 interface FlatEntry {
   vendor: CatalogVendor;
@@ -18,22 +18,22 @@ interface FlatEntry {
 }
 
 /** Marker for "open the form without a preset". */
-const CUSTOM: ServicePrefill = {};
+const CUSTOM: ProviderPrefill = {};
 
-export function ServiceNewPage() {
+export function ProviderNewPage() {
   const catalog = useFetch(() => api.catalog(), []);
-  const services = useFetch(() => api.services(), []);
+  const providers = useFetch(() => api.providers(), []);
   const [query, setQuery] = useState('');
   const [vendorFilter, setVendorFilter] = useState<string>('all');
-  const [prefill, setPrefill] = useState<ServicePrefill | null>(null);
+  const [prefill, setPrefill] = useState<ProviderPrefill | null>(null);
   const toast = useToast();
   const navigate = useNavigate();
 
   const addedCatalogIds = useMemo(() => {
     const set = new Set<string>();
-    for (const s of services.data ?? []) if (s.catalog_id) set.add(s.catalog_id);
+    for (const s of providers.data ?? []) if (s.catalog_id) set.add(s.catalog_id);
     return set;
-  }, [services.data]);
+  }, [providers.data]);
 
   const entries = useMemo<FlatEntry[]>(() => {
     const out: FlatEntry[] = [];
@@ -76,16 +76,16 @@ export function ServiceNewPage() {
 
   return (
     <Page
-      title="New service"
+      title="New provider"
       actions={
-        <Link to="/services" className="btn">
-          <ArrowLeft size={15} /> Back to services
+        <Link to="/providers" className="btn">
+          <ArrowLeft size={15} /> Back to providers
         </Link>
       }
     >
       <div className={styles.intro}>
         Pick a preset — endpoint, wires, models, and prices come pre-filled, you just paste your
-        API key — or configure a custom service from scratch.
+        API key — or configure a custom provider from scratch.
       </div>
 
       {catalog.error ? (
@@ -138,7 +138,7 @@ export function ServiceNewPage() {
                 <div className={styles.customIcon}>
                   <Wrench size={18} />
                 </div>
-                <span className={styles.serviceName}>Custom service</span>
+                <span className={styles.serviceName}>Custom provider</span>
                 <span className={styles.note}>
                   Any OpenAI- or Anthropic-compatible endpoint: set the base URL, key, wires, and
                   per-model prices yourself.
@@ -159,13 +159,13 @@ export function ServiceNewPage() {
       )}
 
       {prefill && (
-        <ServiceForm
+        <ProviderForm
           prefill={prefill}
           onClose={() => setPrefill(null)}
           onSaved={() => {
             setPrefill(null);
-            toast.success('Service added.');
-            navigate('/services');
+            toast.success('Provider added.');
+            navigate('/providers');
           }}
         />
       )}
@@ -224,7 +224,7 @@ function PresetCard({ vendor, service, added, onAdd }: PresetCardProps) {
           <span />
         )}
         <button className="btn btn-sm btn-primary" onClick={onAdd}>
-          <Plus size={13} /> Add
+          <Plus size={13} /> Add provider
         </button>
       </div>
     </div>

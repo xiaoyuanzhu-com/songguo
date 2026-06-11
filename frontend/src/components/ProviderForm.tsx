@@ -1,10 +1,10 @@
 import { useState, type FormEvent } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { api } from '../api/client';
-import type { CreateServiceBody, PatchServiceBody, Service, ServiceModel } from '../api/types';
+import type { CreateProviderBody, PatchProviderBody, Provider, ProviderModel } from '../api/types';
 import { Modal } from './Modal';
 import { useFetch } from '../lib/useFetch';
-import styles from './ServiceForm.module.css';
+import styles from './ProviderForm.module.css';
 
 const UNITS = [
   'per_1m_tokens',
@@ -29,7 +29,7 @@ function defaultWires(adapter: string): string[] {
 }
 
 /** Prefill seeds the form when adding from the catalog. */
-export interface ServicePrefill {
+export interface ProviderPrefill {
   name?: string;
   vendor?: string;
   adapter?: string;
@@ -37,14 +37,14 @@ export interface ServicePrefill {
   catalog_id?: string;
   wires?: string[];
   quirks?: Record<string, string>;
-  models?: ServiceModel[];
+  models?: ProviderModel[];
 }
 
-interface ServiceFormProps {
-  editing?: Service;
-  prefill?: ServicePrefill;
+interface ProviderFormProps {
+  editing?: Provider;
+  prefill?: ProviderPrefill;
   onClose: () => void;
-  onSaved: (service: Service, created: boolean) => void;
+  onSaved: (provider: Provider, created: boolean) => void;
 }
 
 /** Editable model row keeps numbers as strings so fields can be cleared. */
@@ -56,7 +56,7 @@ interface ModelRow {
   unit: string;
 }
 
-function toRows(models: ServiceModel[] | undefined): ModelRow[] {
+function toRows(models: ProviderModel[] | undefined): ModelRow[] {
   if (!models || models.length === 0) return [];
   return models.map((m) => ({
     model: m.model,
@@ -67,7 +67,7 @@ function toRows(models: ServiceModel[] | undefined): ModelRow[] {
   }));
 }
 
-export function ServiceForm({ editing, prefill, onClose, onSaved }: ServiceFormProps) {
+export function ProviderForm({ editing, prefill, onClose, onSaved }: ProviderFormProps) {
   const seed = editing ?? prefill;
   const [name, setName] = useState(seed?.name ?? '');
   const [vendor] = useState(seed?.vendor ?? '');
@@ -135,7 +135,7 @@ export function ServiceForm({ editing, prefill, onClose, onSaved }: ServiceFormP
       return;
     }
 
-    const parsedModels: ServiceModel[] = [];
+    const parsedModels: ProviderModel[] = [];
     for (const row of models) {
       const m = row.model.trim();
       if (!m) continue;
@@ -167,7 +167,7 @@ export function ServiceForm({ editing, prefill, onClose, onSaved }: ServiceFormP
     setErr(null);
     try {
       if (isEdit && editing) {
-        const body: PatchServiceBody = {
+        const body: PatchProviderBody = {
           name: trimmedName,
           vendor,
           adapter,
@@ -181,10 +181,10 @@ export function ServiceForm({ editing, prefill, onClose, onSaved }: ServiceFormP
           wires,
         };
         if (apiKey.trim()) body.api_key = apiKey.trim();
-        const saved = await api.patchService(editing.id, body);
+        const saved = await api.patchProvider(editing.id, body);
         onSaved(saved, false);
       } else {
-        const body: CreateServiceBody = {
+        const body: CreateProviderBody = {
           name: trimmedName,
           vendor,
           adapter,
@@ -199,7 +199,7 @@ export function ServiceForm({ editing, prefill, onClose, onSaved }: ServiceFormP
           models: parsedModels,
           wires,
         };
-        const saved = await api.createService(body);
+        const saved = await api.createProvider(body);
         onSaved(saved, true);
       }
     } catch (e2) {
@@ -210,20 +210,20 @@ export function ServiceForm({ editing, prefill, onClose, onSaved }: ServiceFormP
 
   return (
     <Modal
-      title={isEdit ? `Edit ${editing!.name}` : 'Add service'}
+      title={isEdit ? `Edit ${editing!.name}` : 'Add provider'}
       onClose={onClose}
       footer={
         <>
           <button className="btn" onClick={onClose} disabled={busy}>
             Cancel
           </button>
-          <button type="submit" form="service-form" className="btn btn-primary" disabled={busy}>
-            {busy ? 'Saving…' : isEdit ? 'Save changes' : 'Add service'}
+          <button type="submit" form="provider-form" className="btn btn-primary" disabled={busy}>
+            {busy ? 'Saving…' : isEdit ? 'Save changes' : 'Add provider'}
           </button>
         </>
       }
     >
-      <form id="service-form" onSubmit={submit}>
+      <form id="provider-form" onSubmit={submit}>
         <div className={styles.grid2}>
           <div className={styles.field}>
             <label className={styles.label} htmlFor="s-name">
@@ -294,7 +294,7 @@ export function ServiceForm({ editing, prefill, onClose, onSaved }: ServiceFormP
             onChange={(e) => setApiKey(e.target.value)}
           />
           <span className={styles.hint}>
-            One key per service. Stored as-is; shown masked afterwards.
+            One key per provider. Stored as-is; shown masked afterwards.
           </span>
         </div>
 

@@ -1,4 +1,4 @@
-// Package configsvc builds the live routing Snapshot from SQLite-backed service
+// Package configsvc builds the live routing Snapshot from SQLite-backed provider
 // rows, replacing the file-based config.Manager as the source of truth.
 //
 // It holds an atomic *config.Snapshot rebuilt on demand (Reload) after any
@@ -7,9 +7,9 @@
 // rest of the gateway is unchanged — only the snapshot's source moved from a
 // YAML file to the database.
 //
-// Robustness: a single incomplete service (no credentials, no models, or
+// Robustness: a single incomplete provider (no credentials, no models, or
 // disabled) is skipped rather than allowed to fail the whole snapshot build, so
-// a half-configured service can never take routing down.
+// a half-configured provider can never take routing down.
 package configsvc
 
 import (
@@ -22,9 +22,9 @@ import (
 	"github.com/songguo/songguo/internal/wire"
 )
 
-// DefaultWires is the wire allowlist granted to a service when none is given
-// explicitly, keyed by the service's adapter (auth scheme). Catalog presets
-// override this with precise per-service lists.
+// DefaultWires is the wire allowlist granted to a provider when none is given
+// explicitly, keyed by the provider's adapter (auth scheme). Catalog presets
+// override this with precise per-provider lists.
 func DefaultWires(adapter string) []string {
 	if adapter == config.AdapterAnthropic {
 		return []string{"anthropic/messages", "anthropic/models"}
@@ -41,7 +41,7 @@ type Manager struct {
 
 // NewManager builds the initial snapshot from the store and returns a ready
 // Manager. A build error at startup is non-fatal: it logs and starts empty so
-// the gateway still serves (an admin can then fix the offending service).
+// the gateway still serves (an admin can then fix the offending provider).
 func NewManager(st *store.Store, logger *slog.Logger) (*Manager, error) {
 	if logger == nil {
 		logger = slog.Default()
@@ -72,11 +72,11 @@ func (m *Manager) Reload() error {
 }
 
 // build assembles a config.Config from the store and validates it into a
-// Snapshot. Incomplete/disabled services are skipped with a warning.
+// Snapshot. Incomplete/disabled providers are skipped with a warning.
 func (m *Manager) build() (*config.Snapshot, error) {
-	services, err := m.store.ListServices()
+	providers, err := m.store.ListProviders()
 	if err != nil {
-		return nil, fmt.Errorf("configsvc: list services: %w", err)
+		return nil, fmt.Errorf("configsvc: list providers: %w", err)
 	}
 	as, err := m.store.GetAppSettings()
 	if err != nil {
@@ -90,28 +90,28 @@ func (m *Manager) build() (*config.Snapshot, error) {
 			CaptureRetain:   as.CaptureRetain,
 		},
 	}
-	for _, svc := range services {
-		if !svc.Enabled {
+	for _, pvd := range providers {
+		if !pvd.Enabled {
 			continue
 		}
-		if svc.APIKey == "" || len(svc.Models) == 0 {
-			m.logger.Warn("skipping incomplete service (no API key or models)",
-				"service", svc.Name, "has_key", svc.APIKey != "", "models", len(svc.Models))
+		if pvd.APIKey == "" || len(pvd.Models) == 0 {
+			m.logger.Warn("skipping incomplete provider (no API key or models)",
+				"provider", pvd.Name, "has_key", pvd.APIKey != "", "models", len(pvd.Models))
 			continue
 		}
-		cfg.Vendors = append(cfg.Vendors, vendorFromService(svc, m.logger))
+		cfg.Vendors = append(cfg.Vendors, vendorFromProvider(pvd, m.logger))
 	}
 
 	return config.Build(cfg)
 }
 
-// vendorFromService projects a stored service into a config.Vendor for routing.
+// vendorFromProvider projects a stored provider into a config.Vendor for routing.
 // Wire names not present in the registry are dropped with a warning so a typo
 // in the allowlist can never silently match traffic.
-func vendorFromService(svc store.Service, logger *slog.Logger) config.Vendor {
-	models := make([]string, 0, len(svc.Models))
-	prices := make(map[string]config.Price, len(svc.Models))
-	for _, m := range svc.Models {
+func vendorFromProvider(pvd store.Provider, logger *slog.Logger) config.Vendor {
+	models := make([]string, 0, len(pvd.Models))
+	prices := make(map[string]config.Price, len(pvd.Models))
+	for _, m := range pvd.Models {
 		models = append(models, m.Model)
 		unit := m.Unit
 		if unit == "" {
@@ -120,27 +120,27 @@ func vendorFromService(svc store.Service, logger *slog.Logger) config.Vendor {
 		prices[m.Model] = config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: unit}
 	}
 
-	wires := make([]string, 0, len(svc.Wires))
-	for _, w := range svc.Wires {
+	wires := make([]string, 0, len(pvd.Wires))
+	for _, w := range pvd.Wires {
 		if _, ok := wire.Get(w); !ok {
-			logger.Warn("dropping unknown wire from service allowlist", "service", svc.Name, "wire", w)
+			logger.Warn("dropping unknown wire from provider allowlist", "provider", pvd.Name, "wire", w)
 			continue
 		}
 		wires = append(wires, w)
 	}
 
 	return config.Vendor{
-		Name:           svc.Name,
-		BaseURL:        svc.BaseURL,
-		Adapter:        svc.Adapter,
+		Name:           pvd.Name,
+		BaseURL:        pvd.BaseURL,
+		Adapter:        pvd.Adapter,
 		ServedModels:   models,
-		Priority:       svc.Priority,
-		Weight:         svc.Weight,
-		Credential:     config.Credential{ID: svc.ID, APIKey: svc.APIKey},
+		Priority:       pvd.Priority,
+		Weight:         pvd.Weight,
+		Credential:     config.Credential{ID: pvd.ID, APIKey: pvd.APIKey},
 		Prices:         prices,
 		Wires:          wires,
-		AllowUnmatched: svc.AllowUnmatched,
-		Quirks:         svc.Quirks,
+		AllowUnmatched: pvd.AllowUnmatched,
+		Quirks:         pvd.Quirks,
 	}
 }
 

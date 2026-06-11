@@ -99,13 +99,15 @@ func NewHandler(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/tokens/{id}/revoke", a.handleRevokeToken)
 	mux.HandleFunc("GET /api/vendors", a.handleListVendors)
 	mux.HandleFunc("POST /api/vendors/{name}/test", a.handleTestVendor)
-	// Services: SQLite-backed vendor/service config, managed from the dashboard.
+	// Services: auto-derived, model-centric view (read-only).
 	mux.HandleFunc("GET /api/services", a.handleListServices)
-	mux.HandleFunc("POST /api/services", a.handleCreateService)
-	mux.HandleFunc("GET /api/services/{id}", a.handleGetService)
-	mux.HandleFunc("PATCH /api/services/{id}", a.handlePatchService)
-	mux.HandleFunc("DELETE /api/services/{id}", a.handleDeleteService)
-	mux.HandleFunc("POST /api/services/{id}/test", a.handleTestService)
+	// Providers: SQLite-backed upstream config, managed from the dashboard.
+	mux.HandleFunc("GET /api/providers", a.handleListProviders)
+	mux.HandleFunc("POST /api/providers", a.handleCreateProvider)
+	mux.HandleFunc("GET /api/providers/{id}", a.handleGetProvider)
+	mux.HandleFunc("PATCH /api/providers/{id}", a.handlePatchProvider)
+	mux.HandleFunc("DELETE /api/providers/{id}", a.handleDeleteProvider)
+	mux.HandleFunc("POST /api/providers/{id}/test", a.handleTestProvider)
 	mux.HandleFunc("GET /api/catalog", a.handleCatalog)
 	mux.HandleFunc("GET /api/wires", a.handleWires)
 	mux.HandleFunc("GET /api/settings", a.handleSettings)

@@ -1,459 +1,92 @@
 package api
 
 import (
-	"errors"
 	"net/http"
-	"net/url"
-	"strings"
-	"time"
-
-	"github.com/songguo/songguo/internal/catalog"
-	"github.com/songguo/songguo/internal/configsvc"
-	"github.com/songguo/songguo/internal/store"
-	"github.com/songguo/songguo/internal/wire"
+	"sort"
 )
 
-// --- views ---
+// --- auto-derived services (model-centric view) ---
 
-type serviceModelView struct {
-	Model       string  `json:"model"`
-	Input       float64 `json:"input"`
-	Output      float64 `json:"output"`
-	CachedInput float64 `json:"cached_input"`
-	Unit        string  `json:"unit"`
+type serviceProviderView struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Priority int    `json:"priority"`
+	Weight   int    `json:"weight"`
 }
 
-// serviceView is the JSON representation of a configured service. The API key
-// is never serialized in the clear — only a masked preview.
+type serviceStatsView struct {
+	Requests     int     `json:"requests"`
+	Errors       int     `json:"errors"`
+	AvgLatencyMS float64 `json:"avg_latency_ms"`
+}
+
 type serviceView struct {
-	ID             string             `json:"id"`
-	Name           string             `json:"name"`
-	Vendor         string             `json:"vendor"`
-	Adapter        string             `json:"adapter"`
-	BaseURL        string             `json:"base_url"`
-	Priority       int                `json:"priority"`
-	Weight         int                `json:"weight"`
-	Enabled        bool               `json:"enabled"`
-	CatalogID      string             `json:"catalog_id"`
-	Wires          []string           `json:"wires"`
-	AllowUnmatched bool               `json:"allow_unmatched"`
-	Quirks         map[string]string  `json:"quirks"`
-	MaskedKey      string             `json:"masked_key"`
-	Models         []serviceModelView `json:"models"`
-	CreatedAt      string             `json:"created_at"`
-	UpdatedAt      string             `json:"updated_at"`
-	Stats          vendorStatsView    `json:"stats"`
+	Model     string               `json:"model"`
+	Providers []serviceProviderView `json:"providers"`
+	Stats     serviceStatsView      `json:"stats"`
 }
 
-func newServiceView(svc store.Service, stat store.VendorStat, hasStat bool) serviceView {
-	masked := ""
-	if svc.APIKey != "" {
-		masked = maskKey(svc.APIKey)
-	}
-	models := make([]serviceModelView, 0, len(svc.Models))
-	for _, m := range svc.Models {
-		models = append(models, serviceModelView{Model: m.Model, Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: m.Unit})
-	}
-
-	sv := vendorStatsView{Healthy: true}
-	if hasStat {
-		sv.Requests = stat.Requests
-		sv.Errors = stat.Errors
-		sv.AvgLatencyMS = stat.AvgLatency
-		sv.LastStatus = stat.LastStatus
-		if stat.Requests > 0 {
-			sv.ErrorRate = float64(stat.Errors) / float64(stat.Requests)
-		}
-		sv.Healthy = stat.Errors == 0
-	}
-
-	return serviceView{
-		ID:             svc.ID,
-		Name:           svc.Name,
-		Vendor:         svc.Vendor,
-		Adapter:        svc.Adapter,
-		BaseURL:        svc.BaseURL,
-		Priority:       svc.Priority,
-		Weight:         svc.Weight,
-		Enabled:        svc.Enabled,
-		CatalogID:      svc.CatalogID,
-		Wires:          svc.Wires,
-		AllowUnmatched: svc.AllowUnmatched,
-		Quirks:         svc.Quirks,
-		MaskedKey:      masked,
-		Models:         models,
-		CreatedAt:      svc.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:      svc.UpdatedAt.UTC().Format(time.RFC3339),
-		Stats:          sv,
-	}
-}
-
-// --- request bodies ---
-
-type serviceModelReq struct {
-	Model       string  `json:"model"`
-	Input       float64 `json:"input"`
-	Output      float64 `json:"output"`
-	CachedInput float64 `json:"cached_input"`
-	Unit        string  `json:"unit"`
-}
-
-type createServiceReq struct {
-	Name           string            `json:"name"`
-	Vendor         string            `json:"vendor"`
-	Adapter        string            `json:"adapter"`
-	BaseURL        string            `json:"base_url"`
-	Priority       int               `json:"priority"`
-	Weight         int               `json:"weight"`
-	Enabled        *bool             `json:"enabled"`
-	CatalogID      string            `json:"catalog_id"`
-	AllowUnmatched bool              `json:"allow_unmatched"`
-	Quirks         map[string]string `json:"quirks"`
-	APIKey         string            `json:"api_key"`
-	Models         []serviceModelReq `json:"models"`
-	Wires          []string          `json:"wires"`
-}
-
-type patchServiceReq struct {
-	Name           *string            `json:"name"`
-	Vendor         *string            `json:"vendor"`
-	Adapter        *string            `json:"adapter"`
-	BaseURL        *string            `json:"base_url"`
-	Priority       *int               `json:"priority"`
-	Weight         *int               `json:"weight"`
-	Enabled        *bool              `json:"enabled"`
-	AllowUnmatched *bool              `json:"allow_unmatched"`
-	// APIKey replaces the service's key when present and non-empty.
-	APIKey *string            `json:"api_key"`
-	Quirks *map[string]string `json:"quirks"`
-	Models *[]serviceModelReq `json:"models"`
-	Wires  *[]string          `json:"wires"`
-}
-
-// --- handlers ---
-
-// handleListServices returns all configured services (keys masked) with stats.
+// handleListServices returns the auto-derived, model-centric service list.
+// Each service corresponds to a unique model name served by one or more
+// providers. No database table — derived from the live snapshot + call stats.
 func (a *api) handleListServices(w http.ResponseWriter, r *http.Request) {
-	svcs, err := a.store.ListServices()
-	if err != nil {
-		a.serverError(w, "list services", err)
+	snap := a.snapshot()
+	if snap == nil {
+		writeJSON(w, http.StatusOK, []serviceView{})
 		return
 	}
-	stats, err := a.store.VendorStats(nil, nil)
+
+	vendors := snap.Vendors()
+
+	// Group vendors by model.
+	type providerInfo struct {
+		id   string
+		name string
+		prio int
+		wt   int
+	}
+	modelProviders := make(map[string][]providerInfo)
+	for _, v := range vendors {
+		for _, m := range v.ServedModels {
+			modelProviders[m] = append(modelProviders[m], providerInfo{
+				id:   v.Credential.ID,
+				name: v.Name,
+				prio: v.Priority,
+				wt:   v.Weight,
+			})
+		}
+	}
+
+	// Aggregate call stats per model.
+	modelStats, err := a.store.ModelStats(nil, nil)
 	if err != nil {
-		a.serverError(w, "vendor stats", err)
+		a.serverError(w, "model stats", err)
 		return
 	}
-	views := make([]serviceView, 0, len(svcs))
-	for _, svc := range svcs {
-		st, ok := stats[svc.Name]
-		views = append(views, newServiceView(svc, st, ok))
+
+	// Sort models for stable output.
+	models := make([]string, 0, len(modelProviders))
+	for m := range modelProviders {
+		models = append(models, m)
+	}
+	sort.Strings(models)
+
+	views := make([]serviceView, 0, len(models))
+	for _, m := range models {
+		pis := modelProviders[m]
+		pvs := make([]serviceProviderView, 0, len(pis))
+		for _, pi := range pis {
+			pvs = append(pvs, serviceProviderView{
+				ID: pi.id, Name: pi.name, Priority: pi.prio, Weight: pi.wt,
+			})
+		}
+		sv := serviceStatsView{}
+		if stat, ok := modelStats[m]; ok {
+			sv.Requests = stat.Requests
+			sv.Errors = stat.Errors
+			sv.AvgLatencyMS = stat.AvgLatency
+		}
+		views = append(views, serviceView{Model: m, Providers: pvs, Stats: sv})
 	}
 	writeJSON(w, http.StatusOK, views)
-}
-
-// handleGetService returns one service.
-func (a *api) handleGetService(w http.ResponseWriter, r *http.Request) {
-	svc, err := a.store.GetService(r.PathValue("id"))
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "service not found")
-			return
-		}
-		a.serverError(w, "get service", err)
-		return
-	}
-	writeJSON(w, http.StatusOK, newServiceView(svc, store.VendorStat{}, false))
-}
-
-// handleCreateService creates a service from a JSON body and reloads the config.
-func (a *api) handleCreateService(w http.ResponseWriter, r *http.Request) {
-	var req createServiceReq
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
-		return
-	}
-	if strings.TrimSpace(req.Name) == "" {
-		writeError(w, http.StatusBadRequest, "bad_request", "name is required")
-		return
-	}
-	if msg := validateBaseURL(req.BaseURL); msg != "" {
-		writeError(w, http.StatusBadRequest, "bad_request", msg)
-		return
-	}
-
-	enabled := true
-	if req.Enabled != nil {
-		enabled = *req.Enabled
-	}
-
-	// Wires default by adapter when omitted, so plain creates (old UI, curl)
-	// never produce a service that denies all traffic.
-	wires := req.Wires
-	if len(wires) == 0 {
-		wires = configsvc.DefaultWires(req.Adapter)
-	}
-
-	svc, err := a.store.CreateService(store.NewService{
-		Name:           strings.TrimSpace(req.Name),
-		Vendor:         req.Vendor,
-		Adapter:        req.Adapter,
-		BaseURL:        strings.TrimSpace(req.BaseURL),
-		Priority:       req.Priority,
-		Weight:         req.Weight,
-		Enabled:        enabled,
-		CatalogID:      req.CatalogID,
-		AllowUnmatched: req.AllowUnmatched,
-		Quirks:         req.Quirks,
-		APIKey:         strings.TrimSpace(req.APIKey),
-		Models:         toStoreModels(req.Models),
-		Wires:          wires,
-	})
-	if err != nil {
-		if isUniqueViolation(err) {
-			writeError(w, http.StatusConflict, "conflict", "a service with that name already exists")
-			return
-		}
-		a.serverError(w, "create service", err)
-		return
-	}
-	a.reloadAfterWrite()
-	writeJSON(w, http.StatusCreated, newServiceView(svc, store.VendorStat{}, false))
-}
-
-// handlePatchService applies a subset of fields and reloads the config.
-func (a *api) handlePatchService(w http.ResponseWriter, r *http.Request) {
-	var req patchServiceReq
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
-		return
-	}
-	if req.BaseURL != nil {
-		if msg := validateBaseURL(*req.BaseURL); msg != "" {
-			writeError(w, http.StatusBadRequest, "bad_request", msg)
-			return
-		}
-	}
-	if req.APIKey != nil {
-		trimmed := strings.TrimSpace(*req.APIKey)
-		if trimmed == "" {
-			writeError(w, http.StatusBadRequest, "bad_request", "api_key cannot be empty")
-			return
-		}
-		req.APIKey = &trimmed
-	}
-	upd := store.ServiceUpdate{
-		Name:           req.Name,
-		Vendor:         req.Vendor,
-		Adapter:        req.Adapter,
-		BaseURL:        req.BaseURL,
-		Priority:       req.Priority,
-		Weight:         req.Weight,
-		Enabled:        req.Enabled,
-		AllowUnmatched: req.AllowUnmatched,
-		APIKey:         req.APIKey,
-		Quirks:         req.Quirks,
-	}
-	if req.Models != nil {
-		upd.Models = toStoreModels(*req.Models)
-		if upd.Models == nil {
-			upd.Models = []store.ServiceModel{} // explicit clear
-		}
-	}
-	if req.Wires != nil {
-		upd.Wires = *req.Wires
-		if upd.Wires == nil {
-			upd.Wires = []string{} // explicit clear
-		}
-	}
-
-	svc, err := a.store.UpdateService(r.PathValue("id"), upd)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "service not found")
-			return
-		}
-		if isUniqueViolation(err) {
-			writeError(w, http.StatusConflict, "conflict", "a service with that name already exists")
-			return
-		}
-		a.serverError(w, "update service", err)
-		return
-	}
-	a.reloadAfterWrite()
-	writeJSON(w, http.StatusOK, newServiceView(svc, store.VendorStat{}, false))
-}
-
-// handleDeleteService removes a service and reloads the config.
-func (a *api) handleDeleteService(w http.ResponseWriter, r *http.Request) {
-	if err := a.store.DeleteService(r.PathValue("id")); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "service not found")
-			return
-		}
-		a.serverError(w, "delete service", err)
-		return
-	}
-	a.reloadAfterWrite()
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// handleTestService probes a configured service's host origin for reachability,
-// authenticating with its API key.
-func (a *api) handleTestService(w http.ResponseWriter, r *http.Request) {
-	svc, err := a.store.GetService(r.PathValue("id"))
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "not_found", "service not found")
-			return
-		}
-		a.serverError(w, "get service", err)
-		return
-	}
-
-	origin, err := originOf(svc.BaseURL)
-	if err != nil {
-		writeJSON(w, http.StatusOK, testVendorView{Reachable: false, Error: err.Error()})
-		return
-	}
-	ctx, cancel := contextWithTimeout(r, 5*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin, nil)
-	if err != nil {
-		writeJSON(w, http.StatusOK, testVendorView{Reachable: false, Error: err.Error()})
-		return
-	}
-	if svc.APIKey != "" {
-		applyTestAuth(req, svc.Adapter, svc.APIKey)
-	}
-
-	start := a.now()
-	resp, err := a.client.Do(req)
-	latency := a.now().Sub(start).Milliseconds()
-	if err != nil {
-		writeJSON(w, http.StatusOK, testVendorView{Reachable: false, LatencyMS: latency, Error: err.Error()})
-		return
-	}
-	defer resp.Body.Close()
-	drain(resp.Body)
-
-	writeJSON(w, http.StatusOK, testVendorView{Reachable: true, Status: resp.StatusCode, LatencyMS: latency})
-}
-
-// handleCatalog returns the embedded preset directory.
-func (a *api) handleCatalog(w http.ResponseWriter, r *http.Request) {
-	c, err := catalog.Load()
-	if err != nil {
-		a.serverError(w, "load catalog", err)
-		return
-	}
-	writeJSON(w, http.StatusOK, c)
-}
-
-// handleWires returns all registered wire names, for the service form's
-// allowlist picker.
-func (a *api) handleWires(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, wire.Names())
-}
-
-type patchSettingsReq struct {
-	Capture         *bool `json:"capture"`
-	CaptureMaxBytes *int  `json:"capture_max_bytes"`
-	CaptureRetain   *int  `json:"capture_retain"`
-}
-
-// handlePatchSettings updates the gateway settings singleton and reloads.
-func (a *api) handlePatchSettings(w http.ResponseWriter, r *http.Request) {
-	var req patchSettingsReq
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "invalid JSON body")
-		return
-	}
-	cur, err := a.store.GetAppSettings()
-	if err != nil {
-		a.serverError(w, "get settings", err)
-		return
-	}
-	if req.Capture != nil {
-		cur.Capture = *req.Capture
-	}
-	if req.CaptureMaxBytes != nil && *req.CaptureMaxBytes > 0 {
-		cur.CaptureMaxBytes = *req.CaptureMaxBytes
-	}
-	if req.CaptureRetain != nil && *req.CaptureRetain > 0 {
-		cur.CaptureRetain = *req.CaptureRetain
-	}
-	if err := a.store.UpdateAppSettings(cur); err != nil {
-		a.serverError(w, "update settings", err)
-		return
-	}
-	a.reloadAfterWrite()
-	a.handleSettings(w, r)
-}
-
-// --- helpers ---
-
-// reloadAfterWrite rebuilds the live snapshot after a config change, logging
-// (never surfacing) a build failure — the write already succeeded.
-func (a *api) reloadAfterWrite() {
-	if err := a.reload(); err != nil {
-		a.logger.Error("config reload after write failed", "err", err)
-	}
-}
-
-// toStoreModels converts request models into store models, dropping empties.
-func toStoreModels(in []serviceModelReq) []store.ServiceModel {
-	if in == nil {
-		return nil
-	}
-	out := make([]store.ServiceModel, 0, len(in))
-	for _, m := range in {
-		if strings.TrimSpace(m.Model) == "" {
-			continue
-		}
-		unit := m.Unit
-		if unit == "" {
-			unit = "per_1m_tokens"
-		}
-		out = append(out, store.ServiceModel{Model: m.Model, Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: unit})
-	}
-	return out
-}
-
-// validateBaseURL returns "" when base is a valid absolute http(s) URL with a
-// host, else a human-readable problem message.
-func validateBaseURL(base string) string {
-	base = strings.TrimSpace(base)
-	if base == "" {
-		return "base_url is required"
-	}
-	u, err := url.Parse(base)
-	if err != nil {
-		return "base_url is not a valid URL"
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "base_url must be an absolute http or https URL"
-	}
-	if u.Host == "" {
-		return "base_url must include a host"
-	}
-	return ""
-}
-
-// isUniqueViolation reports whether err is a SQLite UNIQUE constraint failure
-// (e.g. a duplicate service name).
-func isUniqueViolation(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
-}
-
-// applyTestAuth sets the credential header for a connectivity probe using the
-// adapter's convention, mirroring the proxy's auth handling.
-func applyTestAuth(req *http.Request, adapter, key string) {
-	if adapter == "anthropic-compatible" {
-		req.Header.Set("X-Api-Key", key)
-		req.Header.Set("Anthropic-Version", "2023-06-01")
-		return
-	}
-	req.Header.Set("Authorization", "Bearer "+key)
 }

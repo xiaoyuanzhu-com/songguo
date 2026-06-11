@@ -155,9 +155,30 @@ export interface VendorTestResult {
   error?: string;
 }
 
-// --- Services (SQLite-backed vendor/service config) ---
+// --- Services (auto-derived, model-centric view) ---
 
-export interface ServiceModel {
+export interface ServiceProvider {
+  id: string;
+  name: string;
+  priority: number;
+  weight: number;
+}
+
+export interface ServiceStats {
+  requests: number;
+  errors: number;
+  avg_latency_ms: number;
+}
+
+export interface Service {
+  model: string;
+  providers: ServiceProvider[];
+  stats: ServiceStats;
+}
+
+// --- Providers (SQLite-backed upstream config) ---
+
+export interface ProviderModel {
   model: string;
   input: number;
   output: number;
@@ -166,7 +187,7 @@ export interface ServiceModel {
   unit: string;
 }
 
-export interface Service {
+export interface Provider {
   id: string;
   name: string;
   vendor: string;
@@ -181,15 +202,15 @@ export interface Service {
   /** Forward unmatched paths metered-zero instead of denying them. */
   allow_unmatched: boolean;
   quirks: Record<string, string>;
-  /** Masked preview of the service's API key; "" when no key is set. */
+  /** Masked preview of the provider's API key; "" when no key is set. */
   masked_key: string;
-  models: ServiceModel[];
+  models: ProviderModel[];
   created_at: string;
   updated_at: string;
   stats: VendorStats;
 }
 
-export interface CreateServiceBody {
+export interface CreateProviderBody {
   name: string;
   vendor?: string;
   adapter: string;
@@ -201,11 +222,11 @@ export interface CreateServiceBody {
   allow_unmatched?: boolean;
   quirks?: Record<string, string>;
   api_key?: string;
-  models: ServiceModel[];
+  models: ProviderModel[];
   wires?: string[];
 }
 
-export type PatchServiceBody = Partial<{
+export type PatchProviderBody = Partial<{
   name: string;
   vendor: string;
   adapter: string;
@@ -215,9 +236,9 @@ export type PatchServiceBody = Partial<{
   enabled: boolean;
   allow_unmatched: boolean;
   quirks: Record<string, string>;
-  /** Replaces the service's API key when present and non-empty. */
+  /** Replaces the provider's API key when present and non-empty. */
   api_key: string;
-  models: ServiceModel[];
+  models: ProviderModel[];
   wires: string[];
 }>;
 

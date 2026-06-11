@@ -9,7 +9,8 @@ import { ToastProvider } from './components/Toast';
 import { SettingsContext } from './lib/settingsContext';
 import { OverviewPage } from './pages/Overview';
 import { ServicesPage } from './pages/Services';
-import { ServiceNewPage } from './pages/ServiceNew';
+import { ProvidersPage } from './pages/Providers';
+import { ProviderNewPage } from './pages/ProviderNew';
 import { TokensPage } from './pages/Tokens';
 import { SettingsPage } from './pages/SettingsPage';
 
@@ -105,7 +106,8 @@ export function App() {
             >
               <Route index element={<OverviewPage />} />
               <Route path="services" element={<ServicesPage />} />
-              <Route path="services/new" element={<ServiceNewPage />} />
+              <Route path="providers" element={<ProvidersPage />} />
+              <Route path="providers/new" element={<ProviderNewPage />} />
               <Route path="tokens" element={<TokensPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="*" element={<OverviewPage />} />
