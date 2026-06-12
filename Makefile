@@ -1,6 +1,10 @@
 # Songguo — dev / build orchestration
 .PHONY: dev backend frontend build install test clean
 
+# Load .env (if present) and export its variables to all recipes.
+-include .env
+export
+
 # Run the Go backend (:8080) and the Vite dev server (:5173) together.
 # Vite proxies /api, /v1, /x, /healthz to the backend. Ctrl+C stops BOTH.
 dev:
