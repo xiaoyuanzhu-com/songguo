@@ -8,11 +8,25 @@ import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
 import { Skeleton } from '../components/Skeleton';
 import { useFetch } from '../lib/useFetch';
+import { BrandIcon, providerBrand } from '../lib/modelBrand';
 import styles from './ProviderAdd.module.css';
 
-interface FlatEntry {
+// Friendly labels for wire IDs ("openai/chat" → "Chat Completions").
+const WIRE_NAMES: Record<string, string> = {
+  'openai/chat': 'Chat Completions',
+  'openai/completions': 'Completions',
+  'openai/responses': 'Responses',
+  'openai/embeddings': 'Embeddings',
+  'openai/models': 'Models',
+  'anthropic/messages': 'Messages',
+  'anthropic/models': 'Models',
+};
+
+const wireName = (wire: string) => WIRE_NAMES[wire] ?? wire;
+
+interface VendorSection {
   vendor: CatalogVendor;
-  service: CatalogService;
+  services: CatalogService[];
 }
 
 export function ProviderAddPage() {
@@ -20,7 +34,6 @@ export function ProviderAddPage() {
   // Only used to mark presets that are already configured.
   const providers = useFetch(() => api.providers(), []);
   const [query, setQuery] = useState('');
-  const [vendorFilter, setVendorFilter] = useState<string>('all');
   const navigate = useNavigate();
 
   const addedCatalogIds = useMemo(() => {
@@ -29,25 +42,22 @@ export function ProviderAddPage() {
     return set;
   }, [providers.data]);
 
-  const entries = useMemo<FlatEntry[]>(() => {
-    const out: FlatEntry[] = [];
-    for (const v of catalog.data?.vendors ?? []) {
-      for (const s of v.services) out.push({ vendor: v, service: s });
+  const sections = useMemo<VendorSection[]>(() => {
+    const q = query.trim().toLowerCase();
+    const out: VendorSection[] = [];
+    for (const vendor of catalog.data?.vendors ?? []) {
+      const services = vendor.services.filter((service) => {
+        if (!q) return true;
+        if (vendor.name.toLowerCase().includes(q)) return true;
+        if (service.name.toLowerCase().includes(q)) return true;
+        if (service.kind.toLowerCase().includes(q)) return true;
+        if ((service.wires ?? []).some((w) => wireName(w).toLowerCase().includes(q))) return true;
+        return service.models.some((m) => m.model.toLowerCase().includes(q));
+      });
+      if (services.length > 0) out.push({ vendor, services });
     }
     return out;
-  }, [catalog.data]);
-
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return entries.filter(({ vendor, service }) => {
-      if (vendorFilter !== 'all' && vendor.id !== vendorFilter) return false;
-      if (!q) return true;
-      if (vendor.name.toLowerCase().includes(q)) return true;
-      if (service.name.toLowerCase().includes(q)) return true;
-      if (service.kind.toLowerCase().includes(q)) return true;
-      return service.models.some((m) => m.model.toLowerCase().includes(q));
-    });
-  }, [entries, query, vendorFilter]);
+  }, [catalog.data, query]);
 
   const openAdd = (service: CatalogService) => {
     navigate(`/providers/new?preset=${encodeURIComponent(service.id)}`);
@@ -62,11 +72,6 @@ export function ProviderAddPage() {
         </Link>
       }
     >
-      <div className={styles.intro}>
-        Pick a preset — endpoint, wires, models, and prices come pre-filled, you just paste your
-        API key — or configure a custom provider from scratch.
-      </div>
-
       {catalog.error ? (
         <ErrorBanner message={catalog.error} onRetry={catalog.refetch} />
       ) : catalog.initialLoading ? (
@@ -80,38 +85,47 @@ export function ProviderAddPage() {
         </div>
       ) : (
         <>
-          <div className={styles.controls}>
-            <div className={styles.searchBox}>
-              <Search size={15} />
-              <input
-                className={styles.searchInput}
-                value={query}
-                placeholder="Search presets, models, providers…"
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </div>
-            <div className={styles.facets}>
-              <button
-                className={`${styles.facet} ${vendorFilter === 'all' ? styles.facetActive : ''}`}
-                onClick={() => setVendorFilter('all')}
-              >
-                All
-              </button>
-              {(catalog.data?.vendors ?? []).map((v) => (
-                <button
-                  key={v.id}
-                  className={`${styles.facet} ${vendorFilter === v.id ? styles.facetActive : ''}`}
-                  onClick={() => setVendorFilter(v.id)}
-                >
-                  {v.name}
-                </button>
-              ))}
-            </div>
+          <div className={styles.searchBox}>
+            <Search size={15} />
+            <input
+              className={styles.searchInput}
+              value={query}
+              placeholder="Search presets, models, providers…"
+              onChange={(e) => setQuery(e.target.value)}
+            />
           </div>
 
-          {filtered.length === 0 && query.trim() !== '' ? (
-            <EmptyState icon={Search} title="No matches" hint="Try a different search or facet." />
+          {sections.length === 0 && query.trim() !== '' ? (
+            <EmptyState icon={Search} title="No matches" hint="Try a different search." />
           ) : (
+            sections.map(({ vendor, services }) => (
+              <section key={vendor.id} className={styles.vendorSection}>
+                <h2 className={styles.vendorHead}>
+                  <BrandIcon
+                    brand={providerBrand(
+                      vendor.name,
+                      services.flatMap((s) => s.models.map((m) => m.model)),
+                    )}
+                    label={vendor.name}
+                    size={20}
+                  />
+                  {vendor.name}
+                </h2>
+                <div className={styles.grid}>
+                  {services.map((service) => (
+                    <PresetCard
+                      key={service.id}
+                      service={service}
+                      added={addedCatalogIds.has(service.id)}
+                      onAdd={() => openAdd(service)}
+                    />
+                  ))}
+                </div>
+              </section>
+            ))
+          )}
+
+          <section className={styles.vendorSection}>
             <div className={styles.grid}>
               <button
                 className={`card ${styles.entry} ${styles.custom}`}
@@ -126,17 +140,8 @@ export function ProviderAddPage() {
                   per-model prices yourself.
                 </span>
               </button>
-              {filtered.map(({ vendor, service }) => (
-                <PresetCard
-                  key={`${vendor.id}/${service.id}`}
-                  vendor={vendor}
-                  service={service}
-                  added={addedCatalogIds.has(service.id)}
-                  onAdd={() => openAdd(service)}
-                />
-              ))}
             </div>
-          )}
+          </section>
         </>
       )}
     </Page>
@@ -144,21 +149,17 @@ export function ProviderAddPage() {
 }
 
 interface PresetCardProps {
-  vendor: CatalogVendor;
   service: CatalogService;
   added: boolean;
   onAdd: () => void;
 }
 
-function PresetCard({ vendor, service, added, onAdd }: PresetCardProps) {
+function PresetCard({ service, added, onAdd }: PresetCardProps) {
   const shown = service.models.slice(0, 4);
   return (
     <div className={`card ${styles.entry}`}>
       <div className={styles.entryHead}>
-        <div className={styles.entryTitle}>
-          <span className={styles.vendorName}>{vendor.name}</span>
-          <span className={styles.serviceName}>{service.name}</span>
-        </div>
+        <span className={styles.serviceName}>{service.name}</span>
         {added && (
           <span className={styles.addedChip}>
             <Check size={12} /> Added
@@ -167,8 +168,12 @@ function PresetCard({ vendor, service, added, onAdd }: PresetCardProps) {
       </div>
 
       <div className={styles.tags}>
-        <span className="chip">{service.kind}</span>
         <span className="chip">{service.adapter}</span>
+        {(service.wires ?? []).map((w) => (
+          <span key={w} className="chip">
+            {wireName(w)}
+          </span>
+        ))}
       </div>
 
       <div className={styles.baseUrl}>{service.base_url}</div>

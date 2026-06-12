@@ -1,24 +1,23 @@
-.intro {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 11px 14px;
-  margin-bottom: 16px;
-  border-radius: var(--radius-control);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  font-size: 12.5px;
-  color: var(--text-muted);
+.vendorSection {
+  margin-bottom: 28px;
 }
 
-.controls {
+.vendorSection:first-of-type {
+  margin-top: 4px;
+}
+
+.vendorHead {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-bottom: 16px;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 12px;
 }
 
 .searchBox {
+  margin-bottom: 20px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -43,35 +42,6 @@
   color: var(--text);
 }
 
-.facets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.facet {
-  height: 28px;
-  padding: 0 12px;
-  border-radius: 14px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-muted);
-  font-size: 12.5px;
-  cursor: pointer;
-}
-
-.facet:hover {
-  border-color: var(--accent);
-  color: var(--text);
-}
-
-.facetActive {
-  background: var(--accent-weak);
-  border-color: var(--accent);
-  color: var(--accent);
-  font-weight: 500;
-}
-
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -90,18 +60,6 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
-}
-
-.entryTitle {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.vendorName {
-  font-size: 11.5px;
-  color: var(--text-muted);
 }
 
 .serviceName {
