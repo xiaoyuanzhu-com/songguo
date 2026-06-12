@@ -12,7 +12,22 @@
           "adapter": "openai-compatible",
           "base_url": "https://api.openai.com/v1",
           "docs": "https://platform.openai.com/docs/api-reference/chat",
-          "wires": ["openai/chat", "openai/completions", "openai/responses", "openai/models"],
+          "wires": ["openai/chat", "openai/completions", "openai/models"],
+          "models": [
+            { "model": "gpt-4o", "input": 2.5, "output": 10.0, "cached_input": 1.25, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text", "image"] },
+            { "model": "gpt-4o-mini", "input": 0.15, "output": 0.6, "cached_input": 0.075, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text", "image"] },
+            { "model": "o3-mini", "input": 1.1, "output": 4.4, "cached_input": 0.55, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] }
+          ]
+        },
+        {
+          "id": "openai-responses",
+          "name": "Responses",
+          "kind": "chat",
+          "adapter": "openai-compatible",
+          "base_url": "https://api.openai.com/v1",
+          "docs": "https://platform.openai.com/docs/api-reference/responses",
+          "note": "OpenAI's newer stateful API for agents — the successor to Chat Completions, with built-in tools (web search, file search, computer use).",
+          "wires": ["openai/responses", "openai/models"],
           "models": [
             { "model": "gpt-4o", "input": 2.5, "output": 10.0, "cached_input": 1.25, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text", "image"] },
             { "model": "gpt-4o-mini", "input": 0.15, "output": 0.6, "cached_input": 0.075, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text", "image"] },
@@ -63,7 +78,7 @@
       "services": [
         {
           "id": "deepseek-chat",
-          "name": "Chat",
+          "name": "OpenAI - Chat Completions",
           "kind": "chat",
           "adapter": "openai-compatible",
           "base_url": "https://api.deepseek.com",
@@ -80,12 +95,12 @@
         },
         {
           "id": "deepseek-anthropic",
-          "name": "Anthropic-compatible Messages",
+          "name": "Anthropic - Messages",
           "kind": "chat",
           "adapter": "anthropic-compatible",
           "base_url": "https://api.deepseek.com/anthropic",
           "docs": "https://api-docs.deepseek.com/guides/anthropic_api",
-          "note": "DeepSeek's Anthropic Messages endpoint (for Claude Code and Anthropic SDKs). Claude model aliases map server-side to DeepSeek models.",
+          "note": "Same models, Anthropic wire format (for Claude Code and Anthropic SDKs). Claude model aliases map server-side to DeepSeek models.",
           "wires": ["anthropic/messages", "anthropic/models"],
           "models": [
             { "model": "deepseek-v4-flash", "input": 0.14, "output": 0.28, "cached_input": 0.0028, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] },
@@ -101,13 +116,13 @@
       "services": [
         {
           "id": "ark-chat",
-          "name": "Ark Chat (Doubao)",
+          "name": "OpenAI - Chat Completions",
           "kind": "chat",
           "adapter": "openai-compatible",
           "base_url": "https://ark.cn-beijing.volces.com/api/v3",
           "docs": "https://www.volcengine.com/docs/82379",
           "note": "OpenAI-compatible base is /api/v3, so /v1/chat/completions maps to /api/v3/chat/completions. Cached tokens reported under prompt_tokens_details.",
-          "wires": ["openai/chat", "openai/completions", "openai/embeddings", "openai/responses", "openai/models"],
+          "wires": ["openai/chat", "openai/completions", "openai/models"],
           "models": [
             { "model": "doubao-pro-32k", "input": 0.11, "output": 0.28, "unit": "per_1m_tokens", "context": 32000, "modalities": ["text"] },
             { "model": "doubao-pro-128k", "input": 0.7, "output": 1.3, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] },
@@ -123,13 +138,13 @@
       "services": [
         {
           "id": "dashscope-chat",
-          "name": "Qwen Chat",
+          "name": "OpenAI - Chat Completions",
           "kind": "chat",
           "adapter": "openai-compatible",
           "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
           "docs": "https://help.aliyun.com/zh/model-studio/developer-reference/compatibility-of-openai-with-dashscope",
           "note": "OpenAI-compatible base is /compatible-mode/v1. Use /x/<vendor>/... for native + async endpoints.",
-          "wires": ["openai/chat", "openai/completions", "openai/embeddings", "openai/models"],
+          "wires": ["openai/chat", "openai/completions", "openai/models"],
           "models": [
             { "model": "qwen-plus", "input": 0.4, "output": 1.2, "unit": "per_1m_tokens", "context": 131072, "modalities": ["text"] },
             { "model": "qwen-turbo", "input": 0.05, "output": 0.2, "unit": "per_1m_tokens", "context": 131072, "modalities": ["text"] },
@@ -137,13 +152,26 @@
           ]
         },
         {
+          "id": "dashscope-embeddings",
+          "name": "OpenAI - Embeddings",
+          "kind": "embedding",
+          "adapter": "openai-compatible",
+          "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+          "docs": "https://help.aliyun.com/zh/model-studio/developer-reference/text-embedding-api",
+          "wires": ["openai/embeddings", "openai/models"],
+          "models": [
+            { "model": "text-embedding-v3", "input": 0.07, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] },
+            { "model": "text-embedding-v4", "input": 0.07, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] }
+          ]
+        },
+        {
           "id": "dashscope-anthropic",
-          "name": "Anthropic-compatible Messages",
+          "name": "Anthropic - Messages",
           "kind": "chat",
           "adapter": "anthropic-compatible",
           "base_url": "https://dashscope.aliyuncs.com/apps/anthropic",
           "docs": "https://help.aliyun.com/zh/model-studio/claude-code",
-          "note": "Bailian's Anthropic Messages endpoint (for Claude Code with Qwen models).",
+          "note": "Same Qwen models, Anthropic wire format (for Claude Code and Anthropic SDKs).",
           "wires": ["anthropic/messages", "anthropic/models"],
           "models": [
             { "model": "qwen3-max", "input": 1.6, "output": 6.4, "unit": "per_1m_tokens", "context": 262144, "modalities": ["text"] },
