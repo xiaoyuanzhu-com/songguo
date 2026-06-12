@@ -21,7 +21,7 @@ export function ProviderEditPage() {
     <Page
       title={provider ? `Edit ${provider.name}` : 'Edit provider'}
       actions={
-        <Link to="/services/add" className="btn">
+        <Link to="/providers/add" className="btn">
           <ArrowLeft size={15} /> Back
         </Link>
       }
@@ -38,15 +38,15 @@ export function ProviderEditPage() {
         <EmptyState
           icon={Layers}
           title="Provider not found"
-          hint="It may have been removed. Go back to the services page."
+          hint="It may have been removed. Go back to the providers page."
         />
       ) : (
         <ProviderForm
           editing={provider}
-          onCancel={() => navigate('/services/add')}
+          onCancel={() => navigate('/providers/add')}
           onSaved={() => {
             toast.success('Provider updated.');
-            navigate('/services/add');
+            navigate('/providers/add');
           }}
         />
       )}

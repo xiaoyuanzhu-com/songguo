@@ -32,13 +32,13 @@ export function ProvidersPage() {
           title="No providers yet"
           hint={
             <>
-              <Link to="/services/add">Add a provider</Link> to start routing models.
+              <Link to="/providers/add">Add a provider</Link> to start routing models.
             </>
           }
         />
       ) : (
         <div className={styles.grid}>
-          <Link to="/services/add" className={`card ${styles.addCard}`}>
+          <Link to="/providers/add" className={`card ${styles.addCard}`}>
             <Plus size={20} />
             <span>Add provider</span>
           </Link>

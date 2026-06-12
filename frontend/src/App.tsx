@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { api, clearAdminKey, onUnauthorized } from './api/client';
 import type { Settings } from './api/types';
 import { ApiError } from './api/client';
@@ -9,9 +9,9 @@ import { ToastProvider } from './components/Toast';
 import { SettingsContext } from './lib/settingsContext';
 import { OverviewPage } from './pages/Overview';
 import { ServicesPage } from './pages/Services';
-import { ServiceAddPage } from './pages/ServiceAdd';
 import { ServiceDetailPage } from './pages/ServiceDetail';
 import { ProvidersPage } from './pages/Providers';
+import { ProviderAddPage } from './pages/ProviderAdd';
 import { ProviderNewPage } from './pages/ProviderNew';
 import { ProviderEditPage } from './pages/ProviderEdit';
 import { UsersPage } from './pages/Users';
@@ -106,9 +106,10 @@ export function App() {
             >
               <Route index element={<OverviewPage />} />
               <Route path="services" element={<ServicesPage />} />
-              <Route path="services/add" element={<ServiceAddPage />} />
+              <Route path="services/add" element={<Navigate to="/providers/add" replace />} />
               <Route path="services/:model" element={<ServiceDetailPage />} />
               <Route path="providers" element={<ProvidersPage />} />
+              <Route path="providers/add" element={<ProviderAddPage />} />
               <Route path="providers/new" element={<ProviderNewPage />} />
               <Route path="providers/:id/edit" element={<ProviderEditPage />} />
               <Route path="users" element={<UsersPage />} />

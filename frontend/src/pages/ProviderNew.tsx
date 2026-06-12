@@ -48,14 +48,14 @@ export function ProviderNewPage() {
 
   const onSaved = () => {
     toast.success('Provider added.');
-    navigate('/services/add');
+    navigate('/providers/add');
   };
 
   return (
     <Page
       title={preset?.title ?? 'Add provider'}
       actions={
-        <Link to="/services/add" className="btn">
+        <Link to="/providers/add" className="btn">
           <ArrowLeft size={15} /> Back
         </Link>
       }
@@ -77,7 +77,7 @@ export function ProviderNewPage() {
       ) : (
         <ProviderForm
           prefill={preset?.prefill}
-          onCancel={() => navigate('/services/add')}
+          onCancel={() => navigate('/providers/add')}
           onSaved={onSaved}
         />
       )}

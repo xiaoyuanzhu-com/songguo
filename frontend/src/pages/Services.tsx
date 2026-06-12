@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
-import { Layers, Plus } from 'lucide-react';
+import { Layers } from 'lucide-react';
 import { api } from '../api/client';
 import type { Service } from '../api/types';
 import { EmptyState } from '../components/EmptyState';
@@ -31,16 +31,12 @@ export function ServicesPage() {
           title="No services yet"
           hint={
             <>
-              <Link to="/services/add">Add a provider</Link> to start routing models.
+              <Link to="/providers/add">Add a provider</Link> to start routing models.
             </>
           }
         />
       ) : (
         <div className={styles.grid}>
-          <Link to="/services/add" className={`card ${styles.addCard}`}>
-            <Plus size={20} />
-            <span>Add service</span>
-          </Link>
           {data.map((s) => (
             <ModelCard key={s.model} service={s} />
           ))}
