@@ -97,12 +97,7 @@ export function App() {
         <BrowserRouter>
           <Routes>
             <Route
-              element={
-                <Layout
-                  adminProtected={settings.admin_protected}
-                  version={settings.version}
-                />
-              }
+              element={<Layout />}
             >
               <Route index element={<OverviewPage />} />
               <Route path="services" element={<ServicesPage />} />

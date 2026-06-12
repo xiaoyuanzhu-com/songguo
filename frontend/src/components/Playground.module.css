@@ -1,0 +1,133 @@
+.section {
+  padding: 16px 20px 20px;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.title {
+  font-size: 14px;
+}
+
+.endpoint {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 2px 8px;
+}
+
+.hint {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.keyRow {
+  margin-bottom: 8px;
+}
+
+.keyInput {
+  width: 100%;
+  font-family: var(--font-mono);
+}
+
+.prompt {
+  width: 100%;
+  resize: vertical;
+  min-height: 64px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  font-size: 13px;
+  line-height: 1.5;
+  outline: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.prompt:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
+}
+
+.prompt::placeholder {
+  color: var(--text-muted);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.metaItem {
+  font-size: 12.5px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.result {
+  margin-top: 12px;
+}
+
+.resultText {
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.resultError {
+  background: var(--danger-weak);
+  border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
+  color: var(--danger);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.rawToggle {
+  margin-top: 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.rawToggle:hover {
+  color: var(--accent-hover);
+}
+
+.raw {
+  margin: 8px 0 0;
+  padding: 12px 14px;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre;
+}

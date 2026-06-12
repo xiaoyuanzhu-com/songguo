@@ -1,12 +1,7 @@
 import type { ReactNode } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { Activity, KeyRound, Layers, Lock, LockOpen, Settings, Users } from 'lucide-react';
+import { Activity, KeyRound, Layers, Settings, Users } from 'lucide-react';
 import styles from './Layout.module.css';
-
-interface LayoutContext {
-  adminProtected: boolean;
-  version: string;
-}
 
 const NAV = [
   { to: '/', label: 'Overview', icon: Activity, end: true },
@@ -15,7 +10,7 @@ const NAV = [
   { to: '/settings', label: 'Settings', icon: Settings, end: false },
 ] as const;
 
-export function Layout({ adminProtected, version }: LayoutContext) {
+export function Layout() {
   return (
     <div className={styles.shell}>
       <aside className={styles.sidebar}>
@@ -38,15 +33,6 @@ export function Layout({ adminProtected, version }: LayoutContext) {
             </NavLink>
           ))}
         </nav>
-        <div className={styles.footer}>
-          <span
-            className={`${styles.lock} ${adminProtected ? styles.lockProtected : styles.lockOpen}`}
-          >
-            {adminProtected ? <Lock size={13} /> : <LockOpen size={13} />}
-            {adminProtected ? 'Protected' : 'Unprotected'}
-          </span>
-          <span className={styles.version}>v{version}</span>
-        </div>
       </aside>
       <main className={styles.main}>
         <Outlet />
