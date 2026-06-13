@@ -26,6 +26,7 @@ interface ProviderFormProps {
   editing?: Provider;
   onCancel: () => void;
   onSaved: (provider: Provider, created: boolean) => void;
+  onDeleted?: () => void;
 }
 
 /** Editable model row keeps numbers as strings so fields can be cleared. */
@@ -59,7 +60,7 @@ function toEndpointRows(endpoints: ProviderEndpoint[] | undefined): EndpointRow[
   return endpoints.map((e) => ({ wire: e.wire, baseUrl: e.base_url }));
 }
 
-export function ProviderForm({ editing, onCancel, onSaved }: ProviderFormProps) {
+export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: ProviderFormProps) {
   const [name, setName] = useState(editing?.name ?? '');
   const [vendor] = useState(editing?.vendor ?? '');
   const [priority, setPriority] = useState(editing ? String(editing.priority) : '0');
@@ -72,6 +73,8 @@ export function ProviderForm({ editing, onCancel, onSaved }: ProviderFormProps) 
   const [quirks, setQuirks] = useState<Record<string, string>>(editing?.quirks ?? {});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const allWires = useFetch(() => api.wires(), []);
   const wireOptions = allWires.data ?? [];
@@ -200,6 +203,20 @@ export function ProviderForm({ editing, onCancel, onSaved }: ProviderFormProps) 
     } catch (e2) {
       setErr(e2 instanceof Error ? e2.message : 'Request failed.');
       setBusy(false);
+    }
+  };
+
+  const onDelete = async () => {
+    if (!editing || deleting) return;
+    setDeleting(true);
+    setErr(null);
+    try {
+      await api.deleteProvider(editing.id);
+      onDeleted?.();
+    } catch (e2) {
+      setErr(e2 instanceof Error ? e2.message : 'Delete failed.');
+      setConfirmingDelete(false);
+      setDeleting(false);
     }
   };
 
@@ -455,6 +472,40 @@ export function ProviderForm({ editing, onCancel, onSaved }: ProviderFormProps) 
       {err && <div className={styles.error}>{err}</div>}
 
       <div className={styles.footerRow}>
+        {isEdit && onDeleted && (
+          <div className={styles.footerLeft}>
+            {confirmingDelete ? (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  disabled={deleting}
+                  title="Removes this provider and its endpoints, models, and routing. This cannot be undone."
+                  onClick={onDelete}
+                >
+                  {deleting ? 'Deleting…' : 'Confirm delete'}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={deleting}
+                  onClick={() => setConfirmingDelete(false)}
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={busy}
+                onClick={() => setConfirmingDelete(true)}
+              >
+                <Trash2 size={14} /> Delete
+              </button>
+            )}
+          </div>
+        )}
         <button type="button" className="btn" onClick={onCancel} disabled={busy}>
           Cancel
         </button>

@@ -12,6 +12,12 @@
   border-top: 1px solid var(--border);
 }
 
+.footerLeft {
+  display: flex;
+  gap: 8px;
+  margin-right: auto;
+}
+
 .field {
   display: flex;
   flex-direction: column;

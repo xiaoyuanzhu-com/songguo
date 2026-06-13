@@ -48,6 +48,10 @@ export function ProviderEditPage() {
             toast.success('Provider updated.');
             navigate('/providers');
           }}
+          onDeleted={() => {
+            toast.success(`Deleted "${provider.name}".`);
+            navigate('/providers');
+          }}
         />
       )}
     </Page>
