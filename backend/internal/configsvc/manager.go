@@ -29,6 +29,9 @@ func DefaultWires(adapter string) []string {
 	if adapter == config.AdapterAnthropic {
 		return []string{"anthropic/messages", "anthropic/models"}
 	}
+	if adapter == config.AdapterVolcSpeech {
+		return []string{"volc/tts"}
+	}
 	return []string{"openai/chat", "openai/completions", "openai/embeddings", "openai/models"}
 }
 

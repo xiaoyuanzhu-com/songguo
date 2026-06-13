@@ -455,5 +455,9 @@ func applyTestAuth(req *http.Request, adapter, key string) {
 		req.Header.Set("Anthropic-Version", "2023-06-01")
 		return
 	}
+	if adapter == "volc-speech" {
+		req.Header.Set("X-Api-Key", key)
+		return
+	}
 	req.Header.Set("Authorization", "Bearer "+key)
 }

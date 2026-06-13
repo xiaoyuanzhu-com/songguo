@@ -120,13 +120,43 @@
           "kind": "chat",
           "adapter": "openai-compatible",
           "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-          "docs": "https://www.volcengine.com/docs/82379",
-          "note": "OpenAI-compatible base is /api/v3, so /v1/chat/completions maps to /api/v3/chat/completions. Cached tokens reported under prompt_tokens_details.",
+          "docs": "https://www.volcengine.com/docs/82379/1302010",
+          "note": "OpenAI-compatible base is /api/v3. Pricing is tiered by input length; defaults below are the ≤32k tier (CNY ÷ 7.2). Cached tokens reported under prompt_tokens_details.",
           "wires": ["openai/chat", "openai/completions", "openai/models"],
           "models": [
-            { "model": "doubao-pro-32k", "input": 0.11, "output": 0.28, "unit": "per_1m_tokens", "context": 32000, "modalities": ["text"] },
-            { "model": "doubao-pro-128k", "input": 0.7, "output": 1.3, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] },
-            { "model": "doubao-lite-32k", "input": 0.04, "output": 0.07, "unit": "per_1m_tokens", "context": 32000, "modalities": ["text"] }
+            { "model": "doubao-seed-2-0-pro-260215", "input": 0.44, "output": 2.22, "cached_input": 0.089, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] },
+            { "model": "doubao-seed-2-0-lite-260428", "input": 0.083, "output": 0.5, "cached_input": 0.017, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] },
+            { "model": "doubao-seed-2-0-mini-260428", "input": 0.028, "output": 0.28, "cached_input": 0.006, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text"] },
+            { "model": "doubao-seed-1-6-251015", "input": 0.11, "output": 1.11, "cached_input": 0.022, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] }
+          ]
+        },
+        {
+          "id": "ark-responses",
+          "name": "OpenAI - Responses",
+          "kind": "chat",
+          "adapter": "openai-compatible",
+          "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+          "docs": "https://www.volcengine.com/docs/82379/1585135",
+          "note": "Ark's recommended API for doubao-seed-1.6+ — OpenAI Responses format with stateful multi-turn (previous_response_id) and explicit caching. Same prices as Chat Completions.",
+          "wires": ["openai/responses", "openai/models"],
+          "models": [
+            { "model": "doubao-seed-2-0-pro-260215", "input": 0.44, "output": 2.22, "cached_input": 0.089, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] },
+            { "model": "doubao-seed-2-0-lite-260428", "input": 0.083, "output": 0.5, "cached_input": 0.017, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] },
+            { "model": "doubao-seed-1-6-251015", "input": 0.11, "output": 1.11, "cached_input": 0.022, "unit": "per_1m_tokens", "context": 256000, "modalities": ["text", "image"] }
+          ]
+        },
+        {
+          "id": "volc-tts",
+          "name": "TTS",
+          "kind": "tts",
+          "adapter": "volc-speech",
+          "base_url": "https://openspeech.bytedance.com",
+          "docs": "https://www.volcengine.com/docs/6561/2528925",
+          "note": "豆包语音 streaming speech synthesis. Call via /x/<provider>/api/v3/tts/unidirectional — auth swaps to X-Api-Key; X-Api-Resource-Id picks the model. Billed per text character (¥3/万字符 ÷ 7.2); set X-Control-Require-Usage-Tokens-Return to report usage.",
+          "wires": ["volc/tts"],
+          "models": [
+            { "model": "seed-tts-2.0", "input": 0.0000417, "output": 0.0, "unit": "per_char", "modalities": ["text"] },
+            { "model": "seed-icl-2.0", "input": 0.0000417, "output": 0.0, "unit": "per_char", "modalities": ["text"] }
           ]
         }
       ]
@@ -176,6 +206,130 @@
           "models": [
             { "model": "qwen3-max", "input": 1.6, "output": 6.4, "unit": "per_1m_tokens", "context": 262144, "modalities": ["text"] },
             { "model": "qwen3-coder-plus", "input": 1.0, "output": 5.0, "unit": "per_1m_tokens", "context": 1048576, "modalities": ["text"] }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "minimax",
+      "name": "MiniMax",
+      "homepage": "https://platform.minimaxi.com",
+      "services": [
+        {
+          "id": "minimax-chat",
+          "name": "OpenAI - Chat Completions",
+          "kind": "chat",
+          "adapter": "openai-compatible",
+          "base_url": "https://api.minimaxi.com/v1",
+          "docs": "https://platform.minimaxi.com/docs/api-reference/text-openai-api",
+          "note": "Implicit prompt caching (≥512 input tokens); cached tokens under prompt_tokens_details. Prices are CNY list ÷ 7.2.",
+          "wires": ["openai/chat", "openai/models"],
+          "models": [
+            { "model": "MiniMax-M3", "input": 0.29, "output": 1.17, "cached_input": 0.058, "unit": "per_1m_tokens", "context": 1000000, "modalities": ["text", "image"] },
+            { "model": "MiniMax-M2.7", "input": 0.29, "output": 1.17, "cached_input": 0.058, "unit": "per_1m_tokens", "context": 204800, "modalities": ["text"] },
+            { "model": "MiniMax-M2.7-highspeed", "input": 0.58, "output": 2.33, "cached_input": 0.058, "unit": "per_1m_tokens", "context": 204800, "modalities": ["text"] }
+          ]
+        },
+        {
+          "id": "minimax-anthropic",
+          "name": "Anthropic - Messages",
+          "kind": "chat",
+          "adapter": "anthropic-compatible",
+          "base_url": "https://api.minimaxi.com/anthropic",
+          "docs": "https://platform.minimaxi.com/docs/api-reference/text-anthropic-api",
+          "note": "Same models, Anthropic wire format (for Claude Code and Anthropic SDKs). Caching is explicit cache_control, 5-minute TTL.",
+          "wires": ["anthropic/messages", "anthropic/models"],
+          "models": [
+            { "model": "MiniMax-M3", "input": 0.29, "output": 1.17, "cached_input": 0.058, "unit": "per_1m_tokens", "context": 1000000, "modalities": ["text", "image"] },
+            { "model": "MiniMax-M2.7", "input": 0.29, "output": 1.17, "cached_input": 0.058, "unit": "per_1m_tokens", "context": 204800, "modalities": ["text"] }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "zhipu",
+      "name": "Zhipu 智谱 (BigModel / GLM)",
+      "homepage": "https://bigmodel.cn",
+      "services": [
+        {
+          "id": "zhipu-chat",
+          "name": "OpenAI - Chat Completions",
+          "kind": "chat",
+          "adapter": "openai-compatible",
+          "base_url": "https://open.bigmodel.cn/api/paas/v4",
+          "docs": "https://docs.bigmodel.cn/cn/api/introduction",
+          "note": "No /models listing endpoint. Implicit caching; cached tokens under prompt_tokens_details. Prices are CNY list ÷ 7.2 — verify at bigmodel.cn/pricing (Zhipu repriced several times in 2026).",
+          "wires": ["openai/chat"],
+          "models": [
+            { "model": "glm-5.1", "input": 0.83, "output": 3.33, "cached_input": 0.18, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
+            { "model": "glm-5", "input": 0.56, "output": 2.5, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
+            { "model": "glm-4.7", "input": 0.28, "output": 1.11, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
+            { "model": "glm-4.7-flash", "input": 0.0, "output": 0.0, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
+            { "model": "glm-4.5-air", "input": 0.056, "output": 0.14, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] }
+          ]
+        },
+        {
+          "id": "zhipu-embeddings",
+          "name": "OpenAI - Embeddings",
+          "kind": "embedding",
+          "adapter": "openai-compatible",
+          "base_url": "https://open.bigmodel.cn/api/paas/v4",
+          "docs": "https://docs.bigmodel.cn/cn/guide/models/embedding/embedding-3.md",
+          "wires": ["openai/embeddings"],
+          "models": [
+            { "model": "embedding-3", "input": 0.07, "output": 0.0, "unit": "per_1m_tokens", "modalities": ["text"] }
+          ]
+        },
+        {
+          "id": "zhipu-anthropic",
+          "name": "Anthropic - Messages",
+          "kind": "chat",
+          "adapter": "anthropic-compatible",
+          "base_url": "https://open.bigmodel.cn/api/anthropic",
+          "docs": "https://docs.bigmodel.cn/cn/guide/develop/claude/introduction.md",
+          "note": "Same GLM models, Anthropic wire format. Claude Code aliases map server-side: Opus → glm-5.1, Sonnet → glm-5-turbo, Haiku → glm-4.5-air.",
+          "wires": ["anthropic/messages", "anthropic/models"],
+          "models": [
+            { "model": "glm-5.1", "input": 0.83, "output": 3.33, "cached_input": 0.18, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
+            { "model": "glm-5-turbo", "input": 0.69, "output": 3.06, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text"] },
+            { "model": "glm-4.5-air", "input": 0.056, "output": 0.14, "unit": "per_1m_tokens", "context": 128000, "modalities": ["text"] }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "moonshot",
+      "name": "Moonshot AI 月之暗面 (Kimi)",
+      "homepage": "https://platform.kimi.com",
+      "services": [
+        {
+          "id": "moonshot-chat",
+          "name": "OpenAI - Chat Completions",
+          "kind": "chat",
+          "adapter": "openai-compatible",
+          "base_url": "https://api.moonshot.cn/v1",
+          "docs": "https://platform.kimi.com/docs/api/overview.md",
+          "note": "Automatic context caching on k2.5+; cached tokens reported as top-level usage.cached_tokens. Prices are CNY list ÷ 7.2.",
+          "wires": ["openai/chat", "openai/models"],
+          "quirks": { "cache_tokens": "minimax" },
+          "models": [
+            { "model": "kimi-k2.6", "input": 0.9, "output": 3.75, "cached_input": 0.15, "unit": "per_1m_tokens", "context": 262144, "modalities": ["text", "image"] },
+            { "model": "kimi-k2.5", "input": 0.56, "output": 2.92, "cached_input": 0.1, "unit": "per_1m_tokens", "context": 262144, "modalities": ["text", "image"] }
+          ]
+        },
+        {
+          "id": "moonshot-anthropic",
+          "name": "Anthropic - Messages",
+          "kind": "chat",
+          "adapter": "anthropic-compatible",
+          "base_url": "https://api.moonshot.cn/anthropic",
+          "docs": "https://platform.kimi.com/docs/guide/agent-support.md",
+          "note": "Same models, Anthropic wire format. Moonshot's recommended Claude Code model is kimi-k2.7-code (thinking always on).",
+          "wires": ["anthropic/messages", "anthropic/models"],
+          "models": [
+            { "model": "kimi-k2.7-code", "input": 0.9, "output": 3.75, "cached_input": 0.18, "unit": "per_1m_tokens", "context": 262144, "modalities": ["text"] },
+            { "model": "kimi-k2.6", "input": 0.9, "output": 3.75, "cached_input": 0.15, "unit": "per_1m_tokens", "context": 262144, "modalities": ["text", "image"] },
+            { "model": "kimi-k2.5", "input": 0.56, "output": 2.92, "cached_input": 0.1, "unit": "per_1m_tokens", "context": 262144, "modalities": ["text", "image"] }
           ]
         }
       ]

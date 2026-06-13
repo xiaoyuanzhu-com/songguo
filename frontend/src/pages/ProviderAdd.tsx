@@ -20,6 +20,7 @@ const WIRE_NAMES: Record<string, string> = {
   'openai/models': 'Models',
   'anthropic/messages': 'Messages',
   'anthropic/models': 'Models',
+  'volc/tts': 'TTS',
 };
 
 const wireName = (wire: string) => WIRE_NAMES[wire] ?? wire;

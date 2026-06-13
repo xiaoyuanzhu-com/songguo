@@ -12,10 +12,10 @@ import doubaoSvg from '@lobehub/icons-static-svg/icons/doubao-color.svg?raw';
 import geminiSvg from '@lobehub/icons-static-svg/icons/gemini-color.svg?raw';
 import grokSvg from '@lobehub/icons-static-svg/icons/grok.svg?raw';
 import hunyuanSvg from '@lobehub/icons-static-svg/icons/hunyuan-color.svg?raw';
-import kimiSvg from '@lobehub/icons-static-svg/icons/kimi-color.svg?raw';
 import metaSvg from '@lobehub/icons-static-svg/icons/meta-color.svg?raw';
 import minimaxSvg from '@lobehub/icons-static-svg/icons/minimax-color.svg?raw';
 import mistralSvg from '@lobehub/icons-static-svg/icons/mistral-color.svg?raw';
+import moonshotSvg from '@lobehub/icons-static-svg/icons/moonshot.svg?raw';
 import openaiSvg from '@lobehub/icons-static-svg/icons/openai.svg?raw';
 import qwenSvg from '@lobehub/icons-static-svg/icons/qwen-color.svg?raw';
 import wenxinSvg from '@lobehub/icons-static-svg/icons/wenxin-color.svg?raw';
@@ -42,7 +42,7 @@ const BRANDS: Brand[] = [
   { vendor: 'xAI', svg: grokSvg, color: '#71717a', match: /^grok/ },
   { vendor: 'Meta', svg: metaSvg, color: '#0668e1', match: /^(meta-)?llama/ },
   { vendor: 'Mistral', svg: mistralSvg, color: '#fa520f', match: /^(mistral|mixtral|ministral|codestral|magistral|pixtral|devstral)/ },
-  { vendor: 'Moonshot', svg: kimiSvg, color: '#1ec9b0', match: /^(kimi|moonshot)/ },
+  { vendor: 'Moonshot', svg: moonshotSvg, color: '#16191e', match: /^(kimi|moonshot)/ },
   { vendor: 'Zhipu', svg: zhipuSvg, color: '#3859ff', match: /^(glm|chatglm|zhipu)/ },
   { vendor: 'MiniMax', svg: minimaxSvg, color: '#f23f5d', match: /^(minimax|abab)/ },
   { vendor: 'Tencent', svg: hunyuanSvg, color: '#0072f5', match: /^hunyuan/ },

@@ -458,6 +458,11 @@ func (h *handler) resolvePassthrough(w http.ResponseWriter, r *http.Request, use
 
 	// Best-effort metering only; model may be empty for model-less calls.
 	res := meter.Classify(r.Method, rest, body)
+	if res.Model == "" {
+		// ByteDance openspeech APIs name the billed model in a header rather
+		// than the body; using it lets PriceFor match the price table.
+		res.Model = r.Header.Get("X-Api-Resource-Id")
+	}
 
 	kept, wires, denied := resolveWires(targets, r.Method, rest)
 	if len(kept) == 0 {
@@ -504,6 +509,11 @@ func applyUpstreamAuth(req *http.Request, adapter, key string) {
 		if req.Header.Get("Anthropic-Version") == "" {
 			req.Header.Set("Anthropic-Version", "2023-06-01")
 		}
+	case config.AdapterVolcSpeech:
+		// ByteDance openspeech APIs authenticate with X-Api-Key alone; the
+		// client supplies the other X-Api-* headers (resource id, request id).
+		req.Header.Del("Authorization")
+		req.Header.Set("X-Api-Key", key)
 	default:
 		req.Header.Set("Authorization", "Bearer "+key)
 	}

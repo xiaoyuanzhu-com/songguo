@@ -46,9 +46,10 @@ type Price struct {
 // Adapter names the auth scheme a vendor expects (header style applied when
 // the proxy swaps in the credential).
 const (
-	AdapterOpenAI    = "openai-compatible"
-	AdapterAnthropic = "anthropic-compatible"
-	AdapterMCP       = "mcp"
+	AdapterOpenAI     = "openai-compatible"
+	AdapterAnthropic  = "anthropic-compatible"
+	AdapterVolcSpeech = "volc-speech" // ByteDance openspeech: X-Api-Key, no version header
+	AdapterMCP        = "mcp"
 )
 
 // Vendor is an upstream AI provider.

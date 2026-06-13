@@ -18,12 +18,14 @@ const UNITS = [
 const ADAPTERS = [
   { value: 'openai-compatible', label: 'OpenAI-compatible' },
   { value: 'anthropic-compatible', label: 'Anthropic-compatible' },
+  { value: 'volc-speech', label: 'Volc Speech (X-Api-Key)' },
   { value: 'mcp', label: 'MCP (listed only)' },
 ];
 
 /** Wire allowlist granted when the user picked none, mirroring the backend. */
 function defaultWires(adapter: string): string[] {
   if (adapter === 'anthropic-compatible') return ['anthropic/messages', 'anthropic/models'];
+  if (adapter === 'volc-speech') return ['volc/tts'];
   return ['openai/chat', 'openai/completions', 'openai/embeddings', 'openai/models'];
 }
 
