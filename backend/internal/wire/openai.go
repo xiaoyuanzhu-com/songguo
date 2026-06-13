@@ -43,6 +43,14 @@ func init() {
 		Extract:  zeroCostExtract,
 		ZeroCost: true,
 	})
+	// Image generation (OpenAI-compatible /images/generations, e.g. Doubao
+	// Seedream). Responses carry no token usage, so it's billed per_call.
+	register(Wire{
+		Name:     "openai/images",
+		Suffixes: []string{"/images/generations", "/images/edits"},
+		Modality: calls.ModalityImage,
+		Extract:  perCallExtract,
+	})
 }
 
 // zeroCostExtract meters management endpoints as free without parsing.

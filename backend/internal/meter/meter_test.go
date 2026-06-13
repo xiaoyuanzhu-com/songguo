@@ -22,6 +22,7 @@ func TestClassify(t *testing.T) {
 		{"stt translations", "/v1/audio/translations", `{"model":"whisper-1"}`, calls.ModalitySTT, "whisper-1"},
 		{"image generations", "/v1/images/generations", `{"model":"dall-e-3"}`, calls.ModalityImage, "dall-e-3"},
 		{"image edits", "/v1/images/edits", `{"model":"dall-e-2"}`, calls.ModalityImage, "dall-e-2"},
+		{"video generation tasks", "/api/plan/v3/contents/generations/tasks", `{"model":"doubao-seedance-2.0"}`, calls.ModalityVideo, "doubao-seedance-2.0"},
 		{"unknown path", "/v1/moderations", `{"model":"omni-moderation"}`, calls.ModalityUnknown, "omni-moderation"},
 		{"case insensitive", "/V1/Chat/Completions", `{"model":"gpt-4o"}`, calls.ModalityChat, "gpt-4o"},
 		{"trailing slash and query", "/v1/chat/completions/?stream=true", `{"model":"gpt-4o"}`, calls.ModalityChat, "gpt-4o"},

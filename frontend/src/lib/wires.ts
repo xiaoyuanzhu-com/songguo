@@ -8,10 +8,13 @@ const WIRE_NAMES: Record<string, string> = {
   'openai/completions': 'Completions',
   'openai/responses': 'Responses',
   'openai/embeddings': 'Embeddings',
+  'openai/images': 'Image generation',
   'openai/models': 'Models',
   'anthropic/messages': 'Messages',
   'anthropic/models': 'Models',
+  'ark/video': 'Video generation',
   'volc/tts': 'TTS',
+  'volc/asr': 'ASR',
   'volc/voice-clone': 'Voice cloning',
   'volc/asr': 'ASR (file)',
 };
@@ -22,6 +25,7 @@ const WIRE_NAMES: Record<string, string> = {
 const WIRE_OWNER: Record<string, { id: string; name: string }> = {
   openai: { id: 'openai', name: 'OpenAI' },
   anthropic: { id: 'anthropic', name: 'Anthropic' },
+  ark: { id: 'volcengine', name: 'Volcengine' },
   volc: { id: 'volcengine', name: 'Volcengine' },
 };
 
@@ -43,10 +47,13 @@ const WIRE_KIND: Record<string, string> = {
   'openai/completions': 'chat',
   'openai/responses': 'chat',
   'openai/embeddings': 'embedding',
+  'openai/images': 'image',
   'openai/models': '',
   'anthropic/messages': 'chat',
   'anthropic/models': '',
+  'ark/video': 'video',
   'volc/tts': 'tts',
+  'volc/asr': 'stt',
   'volc/voice-clone': 'tts',
   'volc/asr': 'stt',
 };

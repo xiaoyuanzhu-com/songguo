@@ -25,15 +25,23 @@ func init() {
 		Extract:  zeroCostExtract,
 		ZeroCost: true,
 	})
-	// Bigmodel file recognition (录音文件识别, e.g. doubao-seed-asr): an async
-	// submit→poll pair. submit returns only an ack; the transcript and billed
-	// audio duration arrive on a later query poll, so one wire covers both
-	// suffixes and meters whichever body carries audio_info.duration. Billing
-	// lands on the query call (per_second on the audio length); the submit call
-	// meters zero.
+	// File-recognition ASR (录音文件识别, e.g. doubao-seed-asr): an async
+	// submit→poll pair (/auc/bigmodel/submit, /auc/bigmodel/query). submit
+	// returns only an ack; the transcript and billed audio duration arrive on a
+	// later query poll, so one wire covers both suffixes and meters whichever
+	// body carries audio_info.duration. Billing lands on the query call
+	// (per_second on the audio length); the submit call meters zero.
+	//
+	// Streaming ASR (大模型流式语音识别, doubao-seed-asr-2.0) is WebSocket-only
+	// (/sauc/bigmodel_async, /sauc/bigmodel_nostream): it rides the realtime WS
+	// passthrough, which relays raw frames and never touches this wire's
+	// metering. Its suffixes are folded in here so the catalog can declare the
+	// capability under one volc/asr wire; an HTTP request that ever resolved to
+	// them carries no audio_info.duration and meters as unknown (zero), matching
+	// the deferred state of realtime/duration pricing.
 	register(Wire{
 		Name:     "volc/asr",
-		Suffixes: []string{"/auc/bigmodel/submit", "/auc/bigmodel/query"},
+		Suffixes: []string{"/auc/bigmodel/submit", "/auc/bigmodel/query", "/sauc/bigmodel_async", "/sauc/bigmodel_nostream"},
 		Modality: calls.ModalitySTT,
 		Extract:  volcASRExtract,
 	})
@@ -41,8 +49,9 @@ func init() {
 
 // volcASRExtract meters a Volcengine bigmodel file-ASR response by the
 // recognized audio length: audio_info.duration is milliseconds, mapped to
-// Seconds for per_second pricing. The submit ack carries no audio_info, so it
-// extracts as unknown (metered zero) — only the query poll bills.
+// Seconds for per_second pricing. The submit ack and streaming sauc frames
+// carry no audio_info, so they extract as unknown (metered zero) — only the
+// file-ASR query poll bills.
 func volcASRExtract(body []byte, _ Quirks) Extraction {
 	if len(body) == 0 {
 		return Extraction{Confidence: calls.ConfidenceUnknown}

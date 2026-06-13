@@ -159,6 +159,13 @@ func numAt(m map[string]any, path ...string) float64 {
 	return 0
 }
 
+// perCallExtract meters media-generation endpoints (image/video) that report
+// no token usage object: the request itself is the billable unit. Confidence
+// is measured (the call completed) and Calls=1 drives per_call pricing.
+func perCallExtract(_ []byte, _ Quirks) Extraction {
+	return Extraction{Norm: Normalized{Calls: 1}, Confidence: calls.ConfidenceMeasured}
+}
+
 // confidenceFor grades an extraction: usage present means measured.
 func confidenceFor(raw map[string]any) calls.Confidence {
 	if raw == nil {
