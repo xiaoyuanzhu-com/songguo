@@ -20,9 +20,9 @@ const (
 
 // Settings holds gateway-wide options.
 type Settings struct {
-	Capture         bool   `yaml:"capture"`
-	CaptureMaxBytes int    `yaml:"capture_max_bytes"`
-	CaptureRetain   int    `yaml:"capture_retain"`
+	Capture         bool `yaml:"capture"`
+	CaptureMaxBytes int  `yaml:"capture_max_bytes"`
+	CaptureRetain   int  `yaml:"capture_retain"`
 }
 
 // Credential is a vendor's upstream API key. A vendor holds exactly one; to

@@ -21,7 +21,7 @@ type serviceStatsView struct {
 }
 
 type serviceView struct {
-	Model     string               `json:"model"`
+	Model     string                `json:"model"`
 	Providers []serviceProviderView `json:"providers"`
 	Stats     serviceStatsView      `json:"stats"`
 }

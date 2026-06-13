@@ -345,7 +345,7 @@ func (h *handler) denyUnmatched(w http.ResponseWriter, r *http.Request, userID, 
 		r.Method, path, strings.Join(vendors, ", "))
 	h.append(calls.Entry{
 		TS:         h.now(),
-		UserID:    userID,
+		UserID:     userID,
 		Model:      model,
 		Vendor:     strings.Join(vendors, ","),
 		Status:     http.StatusNotFound,
@@ -661,7 +661,7 @@ func (h *handler) forward(w http.ResponseWriter, r *http.Request, resp *http.Res
 
 	id, err := h.store.AppendCall(calls.Entry{
 		TS:           h.now(),
-		UserID:      userID,
+		UserID:       userID,
 		Model:        model,
 		Modality:     modality,
 		Vendor:       t.Vendor.Name,
@@ -780,7 +780,7 @@ func (h *handler) recordFailure(userID, model string, modality calls.Modality,
 	}
 	h.append(calls.Entry{
 		TS:           h.now(),
-		UserID:      userID,
+		UserID:       userID,
 		Model:        model,
 		Modality:     modality,
 		Vendor:       t.Vendor.Name,

@@ -88,7 +88,7 @@ func newEntryView(e calls.Entry) entryView {
 	return entryView{
 		ID:           e.ID,
 		TS:           e.TS.UTC().Format(time.RFC3339),
-		UserID:      e.UserID,
+		UserID:       e.UserID,
 		Model:        e.Model,
 		Modality:     string(e.Modality),
 		Vendor:       e.Vendor,
@@ -129,7 +129,7 @@ type overviewView struct {
 	ErrorRate       float64            `json:"error_rate"`
 	LatencyMS       latencyView        `json:"latency_ms"`
 	VendorsActive   int                `json:"vendors_active"`
-		UsersActive    int                `json:"users_active"`
+	UsersActive     int                `json:"users_active"`
 	DailyBurn       float64            `json:"daily_burn"`
 	RunwayDays      *float64           `json:"runway_days"`
 }

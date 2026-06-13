@@ -61,14 +61,14 @@ func (s *Store) AppendCall(e calls.Entry) (int64, error) {
 
 // CallFilter selects and pages call rows. Zero-value fields are ignored.
 type CallFilter struct {
-	Since   *time.Time
-	Until   *time.Time
+	Since  *time.Time
+	Until  *time.Time
 	UserID string
-	Model   string
-	Vendor  string
-	Status  *int
-	Limit   int
-	Offset  int
+	Model  string
+	Vendor string
+	Status *int
+	Limit  int
+	Offset int
 }
 
 // where builds the shared WHERE clause and its positional arguments.

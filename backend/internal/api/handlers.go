@@ -190,7 +190,7 @@ func (a *api) handleOverview(w http.ResponseWriter, r *http.Request) {
 		ErrorRate:       errorRate,
 		LatencyMS:       latencyView{P50: stats.P50, P95: stats.P95, P99: stats.P99},
 		VendorsActive:   vendorsActive,
-		UsersActive:    usersActive,
+		UsersActive:     usersActive,
 		DailyBurn:       dailyBurn,
 		RunwayDays:      runway,
 	})

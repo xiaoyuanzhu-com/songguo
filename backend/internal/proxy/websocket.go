@@ -290,7 +290,7 @@ func (h *handler) relayFailedHandshake(w http.ResponseWriter, resp *http.Respons
 
 	h.append(calls.Entry{
 		TS:           h.now(),
-		UserID:      userID,
+		UserID:       userID,
 		Model:        model,
 		Modality:     calls.ModalityRealtime,
 		Vendor:       vendorName,
@@ -381,7 +381,7 @@ func (h *handler) pipeWebSocket(w http.ResponseWriter, r *http.Request,
 	duration := h.now().Sub(sessionStart)
 	h.append(calls.Entry{
 		TS:           h.now(),
-		UserID:      userID,
+		UserID:       userID,
 		Model:        model,
 		Modality:     calls.ModalityRealtime,
 		Vendor:       vendorName,

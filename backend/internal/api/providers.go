@@ -125,12 +125,12 @@ type createProviderReq struct {
 }
 
 type patchProviderReq struct {
-	Name           *string           `json:"name"`
-	Vendor         *string           `json:"vendor"`
-	Priority       *int              `json:"priority"`
-	Weight         *int              `json:"weight"`
-	Enabled        *bool             `json:"enabled"`
-	AllowUnmatched *bool             `json:"allow_unmatched"`
+	Name           *string `json:"name"`
+	Vendor         *string `json:"vendor"`
+	Priority       *int    `json:"priority"`
+	Weight         *int    `json:"weight"`
+	Enabled        *bool   `json:"enabled"`
+	AllowUnmatched *bool   `json:"allow_unmatched"`
 	// APIKey replaces the provider's key when present and non-empty.
 	APIKey    *string                `json:"api_key"`
 	Quirks    *map[string]string     `json:"quirks"`

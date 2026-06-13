@@ -16,7 +16,7 @@ func TestBuildValid(t *testing.T) {
 				Weight:       1,
 				Credential:   Credential{ID: "openai-key-1", APIKey: "sk-aaa"},
 				Prices: map[string]Price{
-					"gpt-4o":                  {Input: 2.50, Output: 10.00, Unit: "per_1m_tokens"},
+					"gpt-4o":                 {Input: 2.50, Output: 10.00, Unit: "per_1m_tokens"},
 					"gpt-4o-mini":            {Input: 0.15, Output: 0.60, Unit: "per_1m_tokens"},
 					"text-embedding-3-small": {Input: 0.02, Unit: "per_1m_tokens"},
 				},
@@ -208,8 +208,8 @@ func TestValidationFailures(t *testing.T) {
 			wantSubs: []string{"empty unit"},
 		},
 		{
-			name: "aggregates multiple problems",
-			cfg:  Config{Vendors: []Vendor{{Name: "", ServedModels: []string{}}}},
+			name:     "aggregates multiple problems",
+			cfg:      Config{Vendors: []Vendor{{Name: "", ServedModels: []string{}}}},
 			wantSubs: []string{"name must be non-empty", "base_url must be non-empty", "served_models must be non-empty", "credential api_key must be non-empty"},
 		},
 	}
