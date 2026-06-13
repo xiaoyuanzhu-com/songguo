@@ -16,8 +16,24 @@ const WIRE_NAMES: Record<string, string> = {
   'volc/asr': 'ASR (file)',
 };
 
-export function wireName(wire: string): string {
-  return WIRE_NAMES[wire] ?? wire;
+// The vendor that owns each wire family. The owner shows the bare wire name
+// ("Chat Completions"); compatible vendors get the owner prefixed
+// ("OpenAI - Chat Completions"). Keyed by the wire-id prefix.
+const WIRE_OWNER: Record<string, { id: string; name: string }> = {
+  openai: { id: 'openai', name: 'OpenAI' },
+  anthropic: { id: 'anthropic', name: 'Anthropic' },
+  volc: { id: 'volcengine', name: 'Volcengine' },
+};
+
+// wireName labels a wire ("openai/chat" → "Chat Completions"). Pass the vendor
+// id to apply the owner prefix for compatible vendors — the wire's owner keeps
+// the bare name, everyone else is prefixed ("OpenAI - Chat Completions").
+export function wireName(wire: string, vendorId?: string): string {
+  const base = WIRE_NAMES[wire] ?? wire;
+  const owner = WIRE_OWNER[wire.split('/')[0]];
+  if (!owner || vendorId === undefined) return base;
+  const owned = vendorId === owner.id || vendorId.startsWith(`${owner.id}-`);
+  return owned ? base : `${owner.name} - ${base}`;
 }
 
 // Coarse kind per wire, used to label models and pick the playground request

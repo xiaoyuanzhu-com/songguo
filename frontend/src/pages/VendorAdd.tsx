@@ -197,7 +197,7 @@ export function VendorAddPage() {
                     aria-pressed={allOn}
                     onClick={() => toggleWire(ep)}
                   >
-                    <span className={styles.apiName}>{wireName(ep.wire)}</span>
+                    <span className={styles.apiName}>{wireName(ep.wire, vendor.id)}</span>
                     <span className={`${styles.apiCheck} ${someOn ? styles.apiCheckOn : ''}`}>
                       {allOn ? <Check size={13} strokeWidth={3} /> : someOn ? <Minus size={13} strokeWidth={3} /> : null}
                     </span>
