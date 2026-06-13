@@ -1,6 +1,6 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Layers } from 'lucide-react';
+import { ArrowLeft, Check, Layers } from 'lucide-react';
 import { api } from '../api/client';
 import type { CatalogVendor, CreateProviderBody, ProviderEndpoint, ProviderModel } from '../api/types';
 import { EmptyState } from '../components/EmptyState';
@@ -48,7 +48,7 @@ export function VendorAddPage() {
   if (catalog.initialLoading) {
     return (
       <Page title="Add provider">
-        <div className="card" style={{ maxWidth: 720, padding: 20 }}>
+        <div className={`card ${styles.card}`} style={{ padding: 20 }}>
           {Array.from({ length: 4 }).map((_, i) => (
             <Skeleton key={i} height={22} style={{ marginBottom: 10 }} />
           ))}
@@ -69,7 +69,7 @@ export function VendorAddPage() {
     if (busy) return;
     const wires = capWires.filter((w) => checked.has(w));
     if (wires.length === 0) {
-      setErr('Select at least one wire.');
+      setErr('Select at least one API.');
       return;
     }
     const { endpoints, models } = buildProvider(vendor, wires);
@@ -121,36 +121,43 @@ export function VendorAddPage() {
           <label className={styles.label} htmlFor="v-key">API key</label>
           <input
             id="v-key"
-            className="input mono"
+            className={`input mono ${styles.keyInput}`}
             type="password"
             value={apiKey}
-            placeholder="paste your key — one key for this vendor"
+            placeholder="sk-…"
             onChange={(e) => setApiKey(e.target.value)}
           />
-          <span className={styles.hint}>Stored as-is; shown masked afterwards. Shared by all selected wires.</span>
         </div>
 
         <div className={styles.field}>
-          <span className={styles.label}>Wires</span>
-          <span className={styles.hint}>
-            Pick the API surfaces you want. Base URLs and prices are preset; model-listing
-            endpoints are included automatically.
-          </span>
-          <div className={styles.wireList}>
+          <span className={styles.label}>APIs</span>
+          <div className={styles.apiGrid}>
             {vendor.endpoints
               .filter((ep) => wireServesModels(ep.wire))
-              .map((ep) => (
-                <label key={ep.wire} className={styles.wireItem}>
-                  <input type="checkbox" checked={checked.has(ep.wire)} onChange={() => toggle(ep.wire)} />
-                  <span className={styles.wireMain}>
-                    <span className={styles.wireLabel}>{wireName(ep.wire)}</span>
-                    <span className={styles.wireUrl}>{ep.base_url}</span>
-                  </span>
-                  <span className={styles.wireModels}>
-                    {(ep.models ?? []).length} {(ep.models ?? []).length === 1 ? 'model' : 'models'}
-                  </span>
-                </label>
-              ))}
+              .map((ep) => {
+                const isOn = checked.has(ep.wire);
+                const count = (ep.models ?? []).length;
+                return (
+                  <button
+                    key={ep.wire}
+                    type="button"
+                    className={`card ${styles.apiCard} ${isOn ? styles.apiCardOn : ''}`}
+                    aria-pressed={isOn}
+                    onClick={() => toggle(ep.wire)}
+                  >
+                    <span className={styles.apiCardHead}>
+                      <span className={styles.apiName}>{wireName(ep.wire)}</span>
+                      <span className={`${styles.apiCheck} ${isOn ? styles.apiCheckOn : ''}`}>
+                        {isOn && <Check size={13} strokeWidth={3} />}
+                      </span>
+                    </span>
+                    <span className={styles.apiUrl}>{ep.base_url}</span>
+                    <span className={styles.apiModels}>
+                      {count} {count === 1 ? 'model' : 'models'}
+                    </span>
+                  </button>
+                );
+              })}
           </div>
         </div>
 
