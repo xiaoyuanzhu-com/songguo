@@ -18,8 +18,8 @@ export function ProviderNewPage() {
       }
     >
       <p className="muted" style={{ maxWidth: 760, marginTop: 0, fontSize: 13 }}>
-        Any OpenAI- or Anthropic-compatible endpoint: set the base URL, key, the wires it
-        speaks, and per-model prices yourself. For a known vendor, go back and pick its tile
+        Any OpenAI- or Anthropic-compatible endpoint: set the endpoints (wire + full URL),
+        key, and per-model prices yourself. For a known vendor, go back and pick its tile
         instead — the endpoints come pre-filled.
       </p>
       <ProviderForm

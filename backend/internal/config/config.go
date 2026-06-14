@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
 	"strconv"
+	"strings"
 )
 
 // Default capture tuning, applied during normalization when a value is unset
@@ -55,7 +57,7 @@ const (
 // Vendor is an upstream AI provider.
 type Vendor struct {
 	Name         string           `yaml:"name"`
-	BaseURL      string           `yaml:"base_url"`
+	Origin       string           `yaml:"origin"` // scheme://host, used for passthrough/WebSocket and forwarding unmatched paths
 	Adapter      string           `yaml:"adapter"` // auth scheme; default openai-compatible
 	ServedModels []string         `yaml:"served_models"`
 	Priority     int              `yaml:"priority"` // lower = preferred; default 0
@@ -65,7 +67,12 @@ type Vendor struct {
 	// Wires is the allowlist of wire names (see internal/wire) the proxy may
 	// serve for this vendor; paths matching none are denied unless
 	// AllowUnmatched forwards them metered-zero.
-	Wires          []string          `yaml:"wires"`
+	Wires []string `yaml:"wires"`
+	// Endpoints maps each enabled wire to its full upstream URL, used as-is in
+	// model-routed mode (no suffix join). A value may carry a {model} placeholder
+	// (substituted with the request's model) and a query string (e.g. Azure's
+	// ?api-version=…), which is merged with any inbound query.
+	Endpoints      map[string]string `yaml:"endpoints"`
 	AllowUnmatched bool              `yaml:"allow_unmatched"`
 	Quirks         map[string]string `yaml:"quirks"`
 }
@@ -105,6 +112,16 @@ func normalize(cfg *Config) {
 		if cfg.Vendors[i].Adapter == "" {
 			cfg.Vendors[i].Adapter = AdapterOpenAI
 		}
+		// The wire allowlist is the set of wires that have an endpoint; derive it
+		// when not given explicitly (the store path sets both).
+		if len(cfg.Vendors[i].Wires) == 0 && len(cfg.Vendors[i].Endpoints) > 0 {
+			wires := make([]string, 0, len(cfg.Vendors[i].Endpoints))
+			for w := range cfg.Vendors[i].Endpoints {
+				wires = append(wires, w)
+			}
+			sort.Strings(wires)
+			cfg.Vendors[i].Wires = wires
+		}
 		// The credential ID identifies which key served a call in the ledger;
 		// with one key per vendor it defaults to the vendor's own name.
 		if cfg.Vendors[i].Credential.ID == "" {
@@ -139,7 +156,10 @@ func validate(cfg *Config) error {
 			seenVendor[v.Name] = struct{}{}
 		}
 
-		problems = append(problems, validateBaseURL(who, v.BaseURL)...)
+		problems = append(problems, validateOrigin(who, v.Origin)...)
+		for wname, ep := range v.Endpoints {
+			problems = append(problems, validateEndpoint(who, wname, ep)...)
+		}
 		problems = append(problems, validateServedModels(who, v.ServedModels)...)
 		if v.Credential.APIKey == "" {
 			problems = append(problems, fmt.Errorf("%s: credential api_key must be non-empty", who))
@@ -150,19 +170,36 @@ func validate(cfg *Config) error {
 	return errors.Join(problems...)
 }
 
-func validateBaseURL(who, base string) []error {
-	if base == "" {
-		return []error{fmt.Errorf("%s: base_url must be non-empty", who)}
+// validateOrigin checks a vendor's scheme://host origin, used for passthrough
+// forwarding, WebSocket dials, and forwarding paths that match no wire.
+func validateOrigin(who, origin string) []error {
+	return validateURLField(who, "origin", origin, false)
+}
+
+// validateEndpoint checks one wire's full upstream URL. A {model} placeholder is
+// allowed (substituted at request time); it is replaced with a probe before
+// parsing so the braces can't trip the URL parser.
+func validateEndpoint(who, wire, ep string) []error {
+	return validateURLField(who, fmt.Sprintf("endpoint for wire %q", wire), ep, true)
+}
+
+func validateURLField(who, label, raw string, allowTemplate bool) []error {
+	if raw == "" {
+		return []error{fmt.Errorf("%s: %s must be non-empty", who, label)}
 	}
-	u, err := url.Parse(base)
+	probe := raw
+	if allowTemplate {
+		probe = strings.ReplaceAll(probe, "{model}", "MODEL")
+	}
+	u, err := url.Parse(probe)
 	if err != nil {
-		return []error{fmt.Errorf("%s: base_url %q is not a valid URL: %w", who, base, err)}
+		return []error{fmt.Errorf("%s: %s %q is not a valid URL: %w", who, label, raw, err)}
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return []error{fmt.Errorf("%s: base_url %q must be an absolute http or https URL", who, base)}
+		return []error{fmt.Errorf("%s: %s %q must be an absolute http or https URL", who, label, raw)}
 	}
 	if u.Host == "" {
-		return []error{fmt.Errorf("%s: base_url %q must include a host", who, base)}
+		return []error{fmt.Errorf("%s: %s %q must include a host", who, label, raw)}
 	}
 	return nil
 }

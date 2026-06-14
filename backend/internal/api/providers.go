@@ -22,11 +22,11 @@ type providerModelView struct {
 	Unit        string  `json:"unit"`
 }
 
-// providerEndpointView is one wire bound to a base URL + adapter (auth scheme).
+// providerEndpointView is one wire bound to its full upstream URL + adapter (auth scheme).
 type providerEndpointView struct {
-	Wire    string `json:"wire"`
-	BaseURL string `json:"base_url"`
-	Adapter string `json:"adapter"`
+	Wire     string `json:"wire"`
+	Endpoint string `json:"endpoint"`
+	Adapter  string `json:"adapter"`
 }
 
 // providerView is the JSON representation of a configured provider. The API key
@@ -60,7 +60,7 @@ func newProviderView(pvd store.Provider, stat store.VendorStat, hasStat bool) pr
 	}
 	endpoints := make([]providerEndpointView, 0, len(pvd.Endpoints))
 	for _, ep := range pvd.Endpoints {
-		endpoints = append(endpoints, providerEndpointView{Wire: ep.Wire, BaseURL: ep.BaseURL, Adapter: ep.Adapter})
+		endpoints = append(endpoints, providerEndpointView{Wire: ep.Wire, Endpoint: ep.Endpoint, Adapter: ep.Adapter})
 	}
 
 	sv := vendorStatsView{Healthy: true}
@@ -105,9 +105,9 @@ type providerModelReq struct {
 }
 
 type providerEndpointReq struct {
-	Wire    string `json:"wire"`
-	BaseURL string `json:"base_url"`
-	Adapter string `json:"adapter"`
+	Wire     string `json:"wire"`
+	Endpoint string `json:"endpoint"`
+	Adapter  string `json:"adapter"`
 }
 
 type createProviderReq struct {
@@ -313,7 +313,7 @@ func (a *api) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ep := pvd.Endpoints[0]
-	origin, err := originOf(ep.BaseURL)
+	origin, err := originOf(ep.Endpoint)
 	if err != nil {
 		writeJSON(w, http.StatusOK, testVendorView{Reachable: false, Error: err.Error()})
 		return
@@ -424,7 +424,7 @@ func toStoreModels(in []providerModelReq) []store.ProviderModel {
 }
 
 // toStoreEndpoints converts request endpoints into store endpoints, validating
-// each base URL. It returns ("", problem) on the first invalid base URL.
+// each endpoint URL. It returns ("", problem) on the first invalid endpoint.
 func toStoreEndpoints(in []providerEndpointReq) ([]store.ProviderEndpoint, string) {
 	if in == nil {
 		return nil, ""
@@ -434,34 +434,35 @@ func toStoreEndpoints(in []providerEndpointReq) ([]store.ProviderEndpoint, strin
 		if strings.TrimSpace(ep.Wire) == "" {
 			continue
 		}
-		if msg := validateBaseURL(ep.BaseURL); msg != "" {
+		if msg := validateEndpoint(ep.Endpoint); msg != "" {
 			return nil, msg
 		}
 		adapter := ep.Adapter
 		if adapter == "" {
 			adapter = "openai-compatible"
 		}
-		out = append(out, store.ProviderEndpoint{Wire: ep.Wire, BaseURL: strings.TrimSpace(ep.BaseURL), Adapter: adapter})
+		out = append(out, store.ProviderEndpoint{Wire: ep.Wire, Endpoint: strings.TrimSpace(ep.Endpoint), Adapter: adapter})
 	}
 	return out, ""
 }
 
-// validateBaseURL returns "" when base is a valid absolute http(s) URL with a
-// host, else a human-readable problem message.
-func validateBaseURL(base string) string {
-	base = strings.TrimSpace(base)
-	if base == "" {
-		return "base_url is required"
+// validateEndpoint returns "" when ep is a valid absolute http(s) URL with a
+// host, else a human-readable problem message. A {model} placeholder is allowed
+// (substituted at request time) and replaced with a probe before parsing.
+func validateEndpoint(ep string) string {
+	ep = strings.TrimSpace(ep)
+	if ep == "" {
+		return "endpoint is required"
 	}
-	u, err := url.Parse(base)
+	u, err := url.Parse(strings.ReplaceAll(ep, "{model}", "MODEL"))
 	if err != nil {
-		return "base_url is not a valid URL"
+		return "endpoint is not a valid URL"
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return "base_url must be an absolute http or https URL"
+		return "endpoint must be an absolute http or https URL"
 	}
 	if u.Host == "" {
-		return "base_url must include a host"
+		return "endpoint must include a host"
 	}
 	return ""
 }

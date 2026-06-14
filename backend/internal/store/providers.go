@@ -9,11 +9,11 @@ import (
 )
 
 // Provider is one configured vendor: a single API key plus the set of endpoints
-// it serves and the models it prices. An endpoint binds one wire to a base URL
-// (1:1 with the wire); the config manager groups a provider's endpoints by
-// (base_url, adapter) and projects each group into a config.Vendor for routing.
-// The key is stored plaintext at rest (it must be replayed upstream, so it
-// cannot be hashed); it is never serialized to the API in the clear, only masked.
+// it serves and the models it prices. An endpoint binds one wire to its full
+// upstream URL (1:1 with the wire); the config manager groups a provider's
+// endpoints by (origin, adapter) and projects each group into a config.Vendor
+// for routing. The key is stored plaintext at rest (it must be replayed upstream,
+// so it cannot be hashed); it is never serialized to the API in the clear, only masked.
 type Provider struct {
 	ID        string
 	Name      string
@@ -33,13 +33,14 @@ type Provider struct {
 	Endpoints      []ProviderEndpoint
 }
 
-// ProviderEndpoint binds one wire to a base URL and the auth scheme (adapter)
-// that base URL expects. A provider holds several; endpoints sharing a
-// (base_url, adapter) are grouped into one routing vendor by the config manager.
+// ProviderEndpoint binds one wire to its full upstream URL and the auth scheme
+// (adapter) that URL expects. The URL is used as-is by the proxy and may carry a
+// {model} placeholder and a query string. A provider holds several; endpoints
+// sharing an (origin, adapter) are grouped into one routing vendor.
 type ProviderEndpoint struct {
-	Wire    string
-	BaseURL string
-	Adapter string
+	Wire     string
+	Endpoint string
+	Adapter  string
 }
 
 // ProviderModel is a model a provider serves, with its true per-model price.
@@ -147,7 +148,7 @@ func (s *Store) ListProviders() ([]Provider, error) {
 		return nil, fmt.Errorf("store: list models: %w", err)
 	}
 
-	epRows, err := s.db.Query(`SELECT provider_id, wire, base_url, adapter FROM provider_endpoints ORDER BY wire`)
+	epRows, err := s.db.Query(`SELECT provider_id, wire, endpoint, adapter FROM provider_endpoints ORDER BY wire`)
 	if err != nil {
 		return nil, fmt.Errorf("store: list endpoints: %w", err)
 	}
@@ -157,7 +158,7 @@ func (s *Store) ListProviders() ([]Provider, error) {
 			ep  ProviderEndpoint
 			pid string
 		)
-		if err := epRows.Scan(&pid, &ep.Wire, &ep.BaseURL, &ep.Adapter); err != nil {
+		if err := epRows.Scan(&pid, &ep.Wire, &ep.Endpoint, &ep.Adapter); err != nil {
 			return nil, fmt.Errorf("store: scan endpoint: %w", err)
 		}
 		if i, ok := index[pid]; ok {
@@ -199,14 +200,14 @@ func (s *Store) GetProvider(id string) (Provider, error) {
 		return Provider{}, fmt.Errorf("store: get models: %w", err)
 	}
 
-	epRows, err := s.db.Query(`SELECT wire, base_url, adapter FROM provider_endpoints WHERE provider_id = ? ORDER BY wire`, id)
+	epRows, err := s.db.Query(`SELECT wire, endpoint, adapter FROM provider_endpoints WHERE provider_id = ? ORDER BY wire`, id)
 	if err != nil {
 		return Provider{}, fmt.Errorf("store: get endpoints: %w", err)
 	}
 	defer epRows.Close()
 	for epRows.Next() {
 		var ep ProviderEndpoint
-		if err := epRows.Scan(&ep.Wire, &ep.BaseURL, &ep.Adapter); err != nil {
+		if err := epRows.Scan(&ep.Wire, &ep.Endpoint, &ep.Adapter); err != nil {
 			return Provider{}, fmt.Errorf("store: scan endpoint: %w", err)
 		}
 		pvd.Endpoints = append(pvd.Endpoints, ep)
@@ -444,8 +445,8 @@ func insertModels(tx *sql.Tx, providerID string, models []ProviderModel) error {
 	return nil
 }
 
-// insertEndpoints writes a provider's endpoint rows (one wire bound to a base
-// URL + adapter) within a transaction.
+// insertEndpoints writes a provider's endpoint rows (one wire bound to its full
+// upstream URL + adapter) within a transaction.
 func insertEndpoints(tx *sql.Tx, providerID string, endpoints []ProviderEndpoint) error {
 	for _, ep := range endpoints {
 		if ep.Wire == "" {
@@ -455,8 +456,8 @@ func insertEndpoints(tx *sql.Tx, providerID string, endpoints []ProviderEndpoint
 		if adapter == "" {
 			adapter = "openai-compatible"
 		}
-		if _, err := tx.Exec(`INSERT OR REPLACE INTO provider_endpoints (provider_id, wire, base_url, adapter) VALUES (?, ?, ?, ?)`,
-			providerID, ep.Wire, ep.BaseURL, adapter); err != nil {
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO provider_endpoints (provider_id, wire, endpoint, adapter) VALUES (?, ?, ?, ?)`,
+			providerID, ep.Wire, ep.Endpoint, adapter); err != nil {
 			return fmt.Errorf("store: insert endpoint: %w", err)
 		}
 	}

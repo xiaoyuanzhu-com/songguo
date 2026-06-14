@@ -19,8 +19,8 @@ func TestProviderCRUDRoundTrip(t *testing.T) {
 			{Model: "gpt-4o-mini", Input: 0.15, Output: 0.6, Unit: "per_1m_tokens"},
 		},
 		Endpoints: []ProviderEndpoint{
-			{Wire: "openai/chat", BaseURL: "https://api.openai.com/v1", Adapter: "openai-compatible"},
-			{Wire: "openai/models", BaseURL: "https://api.openai.com/v1", Adapter: "openai-compatible"},
+			{Wire: "openai/chat", Endpoint: "https://api.openai.com/v1/chat/completions", Adapter: "openai-compatible"},
+			{Wire: "openai/models", Endpoint: "https://api.openai.com/v1", Adapter: "openai-compatible"},
 		},
 	})
 	if err != nil {
@@ -54,7 +54,7 @@ func TestProviderCRUDRoundTrip(t *testing.T) {
 		Name:      &newName,
 		Enabled:   &disabled,
 		Models:    []ProviderModel{{Model: "gpt-4o", Input: 3, Output: 12, Unit: "per_1m_tokens"}},
-		Endpoints: []ProviderEndpoint{{Wire: "openai/chat", BaseURL: "https://api.openai.com/v1", Adapter: "openai-compatible"}},
+		Endpoints: []ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://api.openai.com/v1/chat/completions", Adapter: "openai-compatible"}},
 	})
 	if err != nil {
 		t.Fatalf("UpdateProvider: %v", err)
@@ -132,8 +132,9 @@ func TestAppSettingsRoundTrip(t *testing.T) {
 // TestEndpointBackfillOnMigration simulates a database that predates the
 // provider_endpoints table: a provider with the legacy per-provider base_url +
 // adapter columns and provider_wires rows. When migrate() creates
-// provider_endpoints, each wire must become an endpoint carrying the provider's
-// base_url + adapter (or the provider would route nowhere after the upgrade).
+// provider_endpoints it backfills each wire from the provider's base_url, then
+// migrateEndpointsToFull rewrites model-routed wires into full endpoints (so the
+// chat wire's URL gains /chat/completions; the model-listing wire keeps the base).
 func TestEndpointBackfillOnMigration(t *testing.T) {
 	s := openTestStore(t)
 
@@ -163,19 +164,31 @@ func TestEndpointBackfillOnMigration(t *testing.T) {
 	if len(got.Endpoints) != 2 {
 		t.Fatalf("endpoints = %+v, want 2 backfilled", got.Endpoints)
 	}
+	want := map[string]string{
+		"openai/chat":   "https://api.openai.com/v1/chat/completions", // model-routed → full
+		"openai/models": "https://api.openai.com/v1",                  // origin-only → base kept
+	}
 	for _, ep := range got.Endpoints {
-		if ep.BaseURL != "https://api.openai.com/v1" || ep.Adapter != "openai-compatible" {
-			t.Errorf("endpoint %q base/adapter = %q/%q, want legacy values", ep.Wire, ep.BaseURL, ep.Adapter)
+		if ep.Adapter != "openai-compatible" {
+			t.Errorf("endpoint %q adapter = %q, want openai-compatible", ep.Wire, ep.Adapter)
+		}
+		if ep.Endpoint != want[ep.Wire] {
+			t.Errorf("endpoint %q = %q, want %q", ep.Wire, ep.Endpoint, want[ep.Wire])
 		}
 	}
 
-	// Re-running migrate with the table present must not duplicate or re-add.
+	// Re-running migrate must be idempotent: no duplicate or double-appended suffix.
 	if err := s.migrate(); err != nil {
 		t.Fatalf("second migrate: %v", err)
 	}
 	got, _ = s.GetProvider("p1")
 	if len(got.Endpoints) != 2 {
 		t.Errorf("endpoints after idempotent migrate = %d, want 2", len(got.Endpoints))
+	}
+	for _, ep := range got.Endpoints {
+		if ep.Endpoint != want[ep.Wire] {
+			t.Errorf("endpoint %q after second migrate = %q, want %q (not double-converted)", ep.Wire, ep.Endpoint, want[ep.Wire])
+		}
 	}
 }
 
@@ -262,8 +275,8 @@ func TestServicesRenameOnMigration(t *testing.T) {
 	if len(got.Models) != 1 || got.Models[0].Model != "m1" {
 		t.Errorf("models = %v, want m1 preserved", got.Models)
 	}
-	if len(got.Endpoints) != 1 || got.Endpoints[0].Wire != "openai/chat" || got.Endpoints[0].BaseURL != "https://x.example.com" {
-		t.Errorf("endpoints = %v, want openai/chat @ x.example.com", got.Endpoints)
+	if len(got.Endpoints) != 1 || got.Endpoints[0].Wire != "openai/chat" || got.Endpoints[0].Endpoint != "https://x.example.com/chat/completions" {
+		t.Errorf("endpoints = %v, want openai/chat @ x.example.com/chat/completions", got.Endpoints)
 	}
 	for _, old := range []string{"services", "service_models", "service_wires"} {
 		if ok, _ := s.tableExists(old); ok {

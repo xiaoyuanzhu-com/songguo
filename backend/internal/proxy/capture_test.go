@@ -22,7 +22,7 @@ settings:
   capture_retain: %d
 vendors:
   - name: vendorA
-    base_url: %s/v1
+    origin: %s/v1
     served_models: [gpt-4o]
     priority: 1
     wires: [openai/chat]
@@ -183,7 +183,7 @@ settings:
   capture: true
 vendors:
   - name: vendorA
-    base_url: %s/v1
+    origin: %s/v1
     served_models: [gpt-4o]
     priority: 1
     wires: [openai/chat]
@@ -191,7 +191,7 @@ vendors:
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
   - name: vendorB
-    base_url: %s/v1
+    origin: %s/v1
     served_models: [gpt-4o]
     priority: 2
     wires: [openai/chat]

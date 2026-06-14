@@ -10,6 +10,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
+
+	"github.com/songguo/songguo/internal/calls"
+	"github.com/songguo/songguo/internal/wire"
 
 	// Pure-Go SQLite driver, registered under the name "sqlite".
 	_ "modernc.org/sqlite"
@@ -172,9 +176,11 @@ func (s *Store) migrate() error {
 			wire        TEXT NOT NULL,
 			PRIMARY KEY (provider_id, wire)
 		)`,
-		// An endpoint binds one wire to a base URL + adapter (auth scheme). It
-		// supersedes provider_wires: a provider holds several, and the config
-		// manager groups them by (base_url, adapter) into routing vendors.
+		// An endpoint binds one wire to its full upstream URL + adapter (auth
+		// scheme). The base_url column is renamed to `endpoint` and its values
+		// rewritten to full per-wire URLs by migrateEndpointsToFull below; the
+		// config manager then groups a provider's endpoints by (origin, adapter)
+		// into routing vendors.
 		`CREATE TABLE IF NOT EXISTS provider_endpoints (
 			provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
 			wire        TEXT NOT NULL,
@@ -244,6 +250,13 @@ func (s *Store) migrate() error {
 			return err
 		}
 	}
+
+	// Rename base_url → endpoint and convert legacy base URLs into full per-wire
+	// endpoints. Atomic and gated on the base_url column, so it runs once across
+	// fresh, legacy, and already-endpoint-backed databases.
+	if err := s.migrateEndpointsToFull(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -266,6 +279,71 @@ func (s *Store) backfillEndpoints() error {
 		return fmt.Errorf("store: backfill endpoints: %w", err)
 	}
 	return nil
+}
+
+// migrateEndpointsToFull renames provider_endpoints.base_url → endpoint and
+// rewrites each legacy base URL into a full per-wire endpoint, used as-is by the
+// proxy. Model-routed wires (chat/embedding) get their canonical path suffix
+// appended; origin-only wires (model listings, speech) keep the base. The whole
+// step runs in one transaction and is gated on the base_url column, so it
+// executes exactly once and an interrupted run is retried (never half-applied).
+func (s *Store) migrateEndpointsToFull() error {
+	has, err := s.hasColumn("provider_endpoints", "base_url")
+	if err != nil {
+		return fmt.Errorf("store: check endpoint column: %w", err)
+	}
+	if !has {
+		return nil // already migrated (column is now `endpoint`) or fresh
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin endpoint migration: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`ALTER TABLE provider_endpoints RENAME COLUMN base_url TO endpoint`); err != nil {
+		return fmt.Errorf("store: rename base_url to endpoint: %w", err)
+	}
+
+	rows, err := tx.Query(`SELECT provider_id, wire, endpoint FROM provider_endpoints`)
+	if err != nil {
+		return fmt.Errorf("store: read endpoints for migration: %w", err)
+	}
+	type epRow struct{ pid, wire, endpoint string }
+	var updates []epRow
+	for rows.Next() {
+		var r epRow
+		if err := rows.Scan(&r.pid, &r.wire, &r.endpoint); err != nil {
+			rows.Close()
+			return fmt.Errorf("store: scan endpoint for migration: %w", err)
+		}
+		w, ok := wire.Get(r.wire)
+		if !ok || len(w.Suffixes) == 0 {
+			continue
+		}
+		if w.Modality != calls.ModalityChat && w.Modality != calls.ModalityEmbedding {
+			continue // origin-only wire: base is already the right value
+		}
+		trimmed := strings.TrimRight(r.endpoint, "/")
+		if trimmed == "" || strings.HasSuffix(trimmed, w.Suffixes[0]) {
+			continue // empty or already a full endpoint
+		}
+		updates = append(updates, epRow{r.pid, r.wire, trimmed + w.Suffixes[0]})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("store: iterate endpoints for migration: %w", err)
+	}
+	rows.Close()
+
+	for _, u := range updates {
+		if _, err := tx.Exec(`UPDATE provider_endpoints SET endpoint = ? WHERE provider_id = ? AND wire = ?`,
+			u.endpoint, u.pid, u.wire); err != nil {
+			return fmt.Errorf("store: convert endpoint to full: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // renameServicesToProviders migrates the services-era schema to the providers

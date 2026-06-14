@@ -139,7 +139,8 @@ export interface VendorStats {
 
 export interface Vendor {
   name: string;
-  base_url: string;
+  origin: string;
+  endpoints: Record<string, string>;
   served_models: string[];
   priority: number;
   weight: number;
@@ -187,10 +188,10 @@ export interface ProviderModel {
   unit: string;
 }
 
-/** One wire bound to a base URL + adapter (auth scheme); 1:1 with the wire. */
+/** One wire bound to its full upstream URL + adapter (auth scheme); 1:1 with the wire. */
 export interface ProviderEndpoint {
   wire: string;
-  base_url: string;
+  endpoint: string;
   adapter: string;
 }
 
@@ -202,7 +203,7 @@ export interface Provider {
   weight: number;
   enabled: boolean;
   catalog_id: string;
-  /** Configured endpoints; each binds one wire to a base URL + adapter. */
+  /** Configured endpoints; each binds one wire to its full upstream URL + adapter. */
   endpoints: ProviderEndpoint[];
   /** Forward unmatched paths metered-zero instead of denying them. */
   allow_unmatched: boolean;
@@ -254,10 +255,10 @@ export interface CatalogModel {
   modalities?: string[];
 }
 
-/** A preset wire bound to a base URL + adapter, with the model ids it serves. */
+/** A preset wire bound to its full upstream URL + adapter, with the model ids it serves. */
 export interface CatalogEndpoint {
   wire: string;
-  base_url: string;
+  endpoint: string;
   adapter: string;
   docs?: string;
   note?: string;

@@ -34,7 +34,7 @@ export function VendorAddPage() {
   const suggestedName = vendor ? `${vendor.name} ${sameVendorCount + 1}` : '';
 
   // Model-bearing wires (the cards). Companion wires (model listings) ride
-  // along on submit when they share a base URL with a selected wire.
+  // along on submit when they share a host + adapter with a selected wire.
   const modelWires = useMemo(
     () =>
       vendor
@@ -202,7 +202,7 @@ export function VendorAddPage() {
                       {allOn ? <Check size={13} strokeWidth={3} /> : someOn ? <Minus size={13} strokeWidth={3} /> : null}
                     </span>
                   </button>
-                  <span className={styles.apiUrl}>{ep.base_url}</span>
+                  <span className={styles.apiUrl}>{ep.endpoint}</span>
                   <div className={styles.modelList}>
                     {models.map((m) => {
                       const on = checked.has(mkey(ep.wire, m));
@@ -249,7 +249,8 @@ const mkey = (wire: string, model: string) => `${wire} ${model}`;
 
 // buildProvider turns the per-(wire, model) selection into the endpoints +
 // models to POST: a wire is included when ≥1 of its models is checked, each
-// included wire pulls in any companion (non-model) wire sharing its base URL,
+// included wire pulls in any companion (non-model) wire sharing its (origin,
+// adapter) group — the same grouping the backend uses to form routing vendors —
 // and only the checked models are priced.
 function buildProvider(vendor: CatalogVendor, checked: Set<string>): {
   endpoints: ProviderEndpoint[];
@@ -264,14 +265,14 @@ function buildProvider(vendor: CatalogVendor, checked: Set<string>): {
     selectedWires.add(ep.wire);
     for (const m of picked) modelIds.add(m);
   }
-  const selectedBases = new Set(
-    vendor.endpoints.filter((ep) => selectedWires.has(ep.wire)).map((ep) => ep.base_url),
+  const selectedGroups = new Set(
+    vendor.endpoints.filter((ep) => selectedWires.has(ep.wire)).map(groupKey),
   );
   const endpoints: ProviderEndpoint[] = [];
   for (const ep of vendor.endpoints) {
-    const include = selectedWires.has(ep.wire) || (!wireServesModels(ep.wire) && selectedBases.has(ep.base_url));
+    const include = selectedWires.has(ep.wire) || (!wireServesModels(ep.wire) && selectedGroups.has(groupKey(ep)));
     if (!include) continue;
-    endpoints.push({ wire: ep.wire, base_url: ep.base_url, adapter: ep.adapter });
+    endpoints.push({ wire: ep.wire, endpoint: ep.endpoint, adapter: ep.adapter });
   }
   const models: ProviderModel[] = [];
   for (const id of modelIds) {
@@ -280,4 +281,20 @@ function buildProvider(vendor: CatalogVendor, checked: Set<string>): {
     models.push({ model: id, input: m.input, output: m.output, cached_input: m.cached_input ?? 0, unit: m.unit });
   }
   return { endpoints, models };
+}
+
+// groupKey is an endpoint's (origin, adapter) — the key the backend groups by to
+// form routing vendors. Used to decide which companion wires ride along.
+function groupKey(ep: CatalogEndpoint): string {
+  return `${originOf(ep.endpoint)}\n${ep.adapter}`;
+}
+
+// originOf is the scheme://host of an endpoint URL (a {model} placeholder is
+// stubbed first so the URL parses). Falls back to the raw string if unparseable.
+function originOf(endpoint: string): string {
+  try {
+    return new URL(endpoint.replace('{model}', 'MODEL')).origin;
+  } catch {
+    return endpoint;
+  }
 }

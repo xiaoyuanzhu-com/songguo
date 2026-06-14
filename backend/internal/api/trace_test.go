@@ -146,7 +146,7 @@ settings:
   capture_retain: 500
 vendors:
   - name: openai
-    base_url: https://api.openai.com
+    origin: https://api.openai.com
     served_models: [gpt-4o]
     credential: {id: k1, api_key: sk-x}
     prices:

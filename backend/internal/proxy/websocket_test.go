@@ -106,14 +106,14 @@ func wsMockServer(t *testing.T, m *wsMockUpstream) *httptest.Server {
 	return srv
 }
 
-// wsVendorYAML builds a one-vendor config whose base_url points at the mock host
+// wsVendorYAML builds a one-vendor config whose origin points at the mock host
 // (http scheme, so the proxy dials plain ws). The rest path is forwarded to the
 // host origin, so any /realtime path lands on the mock.
 func wsVendorYAML(baseURL, vendor, credID, apiKey string) string {
 	return fmt.Sprintf(`
 vendors:
   - name: %s
-    base_url: %s
+    origin: %s
     served_models: [realtime-model]
     priority: 1
     credential: {id: %s, api_key: %s}

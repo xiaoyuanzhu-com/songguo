@@ -38,16 +38,16 @@ func (a *api) serverError(w http.ResponseWriter, op string, err error) {
 	writeError(w, http.StatusInternalServerError, "internal", "internal error")
 }
 
-// originOf returns the scheme://host of a base URL, stripping any path. The
-// vendor connectivity probe targets the origin because base_url now carries a
+// originOf returns the scheme://host of an endpoint URL, stripping any path. The
+// vendor connectivity probe targets the origin because a full endpoint carries a
 // vendor-specific path prefix that may not expose an OpenAI-style route.
-func originOf(base string) (string, error) {
-	u, err := url.Parse(base)
+func originOf(endpoint string) (string, error) {
+	u, err := url.Parse(endpoint)
 	if err != nil {
-		return "", fmt.Errorf("parse base_url %q: %w", base, err)
+		return "", fmt.Errorf("parse endpoint %q: %w", endpoint, err)
 	}
 	if u.Scheme == "" || u.Host == "" {
-		return "", fmt.Errorf("base_url %q missing scheme or host", base)
+		return "", fmt.Errorf("endpoint %q missing scheme or host", endpoint)
 	}
 	return u.Scheme + "://" + u.Host, nil
 }

@@ -72,7 +72,7 @@ func headerContainsToken(value, token string) bool {
 // handleWebSocket performs a transparent WebSocket passthrough for a request
 // mounted at /x/<vendor>/<rest>. rest is the path remainder after "/x/".
 func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user store.User, rest string) {
-	// 1. Resolve the vendor and the upstream WS origin from its base_url.
+	// 1. Resolve the vendor and the upstream WS origin from its origin.
 	vendorName, restPath, ok := strings.Cut(rest, "/")
 	if !ok || vendorName == "" || restPath == "" {
 		writeError(w, http.StatusNotFound, "not_found", "expected /x/<vendor>/<path>")
@@ -91,10 +91,10 @@ func (h *handler) handleWebSocket(w http.ResponseWriter, r *http.Request, user s
 		return
 	}
 
-	host, useTLS, err := wsTargetOf(vendor.BaseURL)
+	host, useTLS, err := wsTargetOf(vendor.Origin)
 	if err != nil {
-		h.logger.Error("vendor base_url invalid", "err", err, "vendor", vendorName)
-		writeError(w, http.StatusBadGateway, "upstream_error", "vendor base_url invalid")
+		h.logger.Error("vendor origin invalid", "err", err, "vendor", vendorName)
+		writeError(w, http.StatusBadGateway, "upstream_error", "vendor origin invalid")
 		return
 	}
 
@@ -419,16 +419,16 @@ func writeWSResponse(w *bufio.Writer, resp *http.Response) error {
 	return w.Flush()
 }
 
-// wsTargetOf maps a vendor base_url to a WebSocket dial target. The scheme is
+// wsTargetOf maps a vendor origin to a WebSocket dial target. The scheme is
 // mapped https->wss (TLS) and http->ws (plain); the returned host carries a
 // port, defaulting to 443 for wss and 80 for ws when the URL omits one.
-func wsTargetOf(base string) (host string, useTLS bool, err error) {
-	u, perr := url.Parse(base)
+func wsTargetOf(origin string) (host string, useTLS bool, err error) {
+	u, perr := url.Parse(origin)
 	if perr != nil {
-		return "", false, fmt.Errorf("parse base_url %q: %w", base, perr)
+		return "", false, fmt.Errorf("parse origin %q: %w", origin, perr)
 	}
 	if u.Scheme == "" || u.Host == "" {
-		return "", false, fmt.Errorf("base_url %q missing scheme or host", base)
+		return "", false, fmt.Errorf("origin %q missing scheme or host", origin)
 	}
 
 	switch u.Scheme {
@@ -437,7 +437,7 @@ func wsTargetOf(base string) (host string, useTLS bool, err error) {
 	case "http":
 		useTLS = false
 	default:
-		return "", false, fmt.Errorf("base_url %q has unsupported scheme %q", base, u.Scheme)
+		return "", false, fmt.Errorf("origin %q has unsupported scheme %q", origin, u.Scheme)
 	}
 
 	hostname := u.Hostname()

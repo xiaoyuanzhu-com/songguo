@@ -87,7 +87,7 @@ export function ProvidersPage() {
               </div>
               <span className={styles.serviceName}>Custom provider</span>
               <span className={styles.note}>
-                Any OpenAI- or Anthropic-compatible endpoint: set the base URL, key, wires, and
+                Any OpenAI- or Anthropic-compatible endpoint: set the endpoints, key, and
                 per-model prices yourself.
               </span>
             </button>

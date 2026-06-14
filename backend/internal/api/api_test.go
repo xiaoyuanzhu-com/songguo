@@ -27,7 +27,7 @@ settings:
   listen: ":8080"
 vendors:
   - name: openai
-    base_url: https://api.openai.com
+    origin: https://api.openai.com
     served_models: [gpt-4o, text-embedding-3-small]
     priority: 1
     weight: 2
@@ -36,7 +36,7 @@ vendors:
       gpt-4o:                  { input: 2.50, output: 10.00, unit: per_1m_tokens }
       text-embedding-3-small: { input: 0.02, output: 0,     unit: per_1m_tokens }
   - name: deepseek
-    base_url: https://api.deepseek.com
+    origin: https://api.deepseek.com
     served_models: [deepseek-chat]
     priority: 2
     credential: {id: deepseek-key-1, api_key: sk-another-secret}
@@ -712,9 +712,8 @@ func TestVendorsNeverLeakAPIKey(t *testing.T) {
 // --- (f) test-connection ---
 
 func TestVendorTestConnectionReachable(t *testing.T) {
-	// The probe must target the host ORIGIN (scheme://host), not base_url's path
-	// prefix, since base_url now carries a vendor-specific version path. Assert
-	// the probe lands on "/" even though base_url ends in /compatible-mode/v1.
+	// The probe targets the vendor's origin (scheme://host); the per-wire
+	// endpoints carry vendor-specific paths, so the probe must land on "/".
 	var gotPath string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -727,7 +726,7 @@ settings:
   listen: ":8080"
 vendors:
   - name: mock
-    base_url: ` + upstream.URL + `/compatible-mode/v1
+    origin: ` + upstream.URL + `
     served_models: [m1]
     credential: {id: k1, api_key: sk-mock-secret}
     prices:
@@ -754,7 +753,7 @@ vendors:
 		t.Errorf("status = %d, want 401", res.Status)
 	}
 	if gotPath != "/" {
-		t.Errorf("probe path = %q, want / (origin probe, base_url path stripped)", gotPath)
+		t.Errorf("probe path = %q, want / (origin probe)", gotPath)
 	}
 }
 
@@ -765,7 +764,7 @@ settings:
   listen: ":8080"
 vendors:
   - name: dead
-    base_url: http://127.0.0.1:1
+    origin: http://127.0.0.1:1
     served_models: [m1]
     credential: {id: k1, api_key: sk-mock-secret}
     prices:

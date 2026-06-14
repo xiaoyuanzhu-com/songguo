@@ -10,7 +10,7 @@ func TestBuildValid(t *testing.T) {
 		Vendors: []Vendor{
 			{
 				Name:         "openai-main",
-				BaseURL:      "https://api.openai.com/v1",
+				Origin:       "https://api.openai.com",
 				ServedModels: []string{"gpt-4o", "gpt-4o-mini", "text-embedding-3-small"},
 				Priority:     1,
 				Weight:       1,
@@ -23,7 +23,7 @@ func TestBuildValid(t *testing.T) {
 			},
 			{
 				Name:         "deepseek",
-				BaseURL:      "https://api.deepseek.com",
+				Origin:       "https://api.deepseek.com",
 				ServedModels: []string{"deepseek-chat", "gpt-4o"},
 				Priority:     2,
 				Credential:   Credential{ID: "deepseek-key-1", APIKey: "sk-bbb"},
@@ -68,8 +68,8 @@ func TestBuildValid(t *testing.T) {
 func TestVendorsForModel_MultiVendor(t *testing.T) {
 	cfg := Config{
 		Vendors: []Vendor{
-			{Name: "openai-main", BaseURL: "https://api.openai.com/v1", ServedModels: []string{"gpt-4o"}, Credential: Credential{APIKey: "sk-a"}},
-			{Name: "deepseek", BaseURL: "https://api.deepseek.com", ServedModels: []string{"deepseek-chat", "gpt-4o"}, Credential: Credential{APIKey: "sk-b"}},
+			{Name: "openai-main", Origin: "https://api.openai.com/v1", ServedModels: []string{"gpt-4o"}, Credential: Credential{APIKey: "sk-a"}},
+			{Name: "deepseek", Origin: "https://api.deepseek.com", ServedModels: []string{"deepseek-chat", "gpt-4o"}, Credential: Credential{APIKey: "sk-b"}},
 		},
 	}
 	snap, err := Build(cfg)
@@ -97,7 +97,7 @@ func TestVendorsForModel_MultiVendor(t *testing.T) {
 func TestSnapshotReturnsCopies(t *testing.T) {
 	cfg := Config{
 		Vendors: []Vendor{
-			{Name: "openai-main", BaseURL: "https://api.openai.com/v1", ServedModels: []string{"gpt-4o"}, Credential: Credential{APIKey: "sk-a"},
+			{Name: "openai-main", Origin: "https://api.openai.com/v1", ServedModels: []string{"gpt-4o"}, Credential: Credential{APIKey: "sk-a"},
 				Prices: map[string]Price{"gpt-4o": {Input: 2.50, Unit: "per_1m_tokens"}}},
 		},
 	}
@@ -132,9 +132,9 @@ func TestEmptyConfigValid(t *testing.T) {
 func TestWeightNormalization(t *testing.T) {
 	cfg := Config{
 		Vendors: []Vendor{
-			{Name: "a", BaseURL: "https://a.example.com", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"}},
-			{Name: "b", BaseURL: "https://b.example.com", ServedModels: []string{"m2"}, Weight: 5, Credential: Credential{APIKey: "k"}},
-			{Name: "c", BaseURL: "https://c.example.com", ServedModels: []string{"m3"}, Weight: -3, Credential: Credential{APIKey: "k"}},
+			{Name: "a", Origin: "https://a.example.com", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"}},
+			{Name: "b", Origin: "https://b.example.com", ServedModels: []string{"m2"}, Weight: 5, Credential: Credential{APIKey: "k"}},
+			{Name: "c", Origin: "https://c.example.com", ServedModels: []string{"m3"}, Weight: -3, Credential: Credential{APIKey: "k"}},
 		},
 	}
 	snap, err := Build(cfg)
@@ -159,50 +159,50 @@ func TestValidationFailures(t *testing.T) {
 		{
 			name: "duplicate vendor name",
 			cfg: Config{Vendors: []Vendor{
-				{Name: "dup", BaseURL: "https://a.example.com", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"}},
-				{Name: "dup", BaseURL: "https://b.example.com", ServedModels: []string{"m2"}, Credential: Credential{APIKey: "k"}},
+				{Name: "dup", Origin: "https://a.example.com", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"}},
+				{Name: "dup", Origin: "https://b.example.com", ServedModels: []string{"m2"}, Credential: Credential{APIKey: "k"}},
 			}},
 			wantSubs: []string{"duplicate vendor name"},
 		},
 		{
-			name:     "missing base_url",
+			name:     "missing origin",
 			cfg:      Config{Vendors: []Vendor{{Name: "a", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"}}}},
-			wantSubs: []string{"base_url must be non-empty"},
+			wantSubs: []string{"origin must be non-empty"},
 		},
 		{
-			name:     "bad base_url scheme",
-			cfg:      Config{Vendors: []Vendor{{Name: "a", BaseURL: "ftp://x", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"}}}},
+			name:     "bad origin scheme",
+			cfg:      Config{Vendors: []Vendor{{Name: "a", Origin: "ftp://x", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"}}}},
 			wantSubs: []string{"absolute http or https"},
 		},
 		{
-			name:     "relative base_url",
-			cfg:      Config{Vendors: []Vendor{{Name: "a", BaseURL: "/relative/path", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"}}}},
+			name:     "relative origin",
+			cfg:      Config{Vendors: []Vendor{{Name: "a", Origin: "/relative/path", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"}}}},
 			wantSubs: []string{"absolute http or https"},
 		},
 		{
 			name:     "empty served_models",
-			cfg:      Config{Vendors: []Vendor{{Name: "a", BaseURL: "https://a.example.com", ServedModels: []string{}, Credential: Credential{APIKey: "k"}}}},
+			cfg:      Config{Vendors: []Vendor{{Name: "a", Origin: "https://a.example.com", ServedModels: []string{}, Credential: Credential{APIKey: "k"}}}},
 			wantSubs: []string{"served_models must be non-empty"},
 		},
 		{
 			name:     "duplicate model within vendor",
-			cfg:      Config{Vendors: []Vendor{{Name: "a", BaseURL: "https://a.example.com", ServedModels: []string{"m1", "m1"}, Credential: Credential{APIKey: "k"}}}},
+			cfg:      Config{Vendors: []Vendor{{Name: "a", Origin: "https://a.example.com", ServedModels: []string{"m1", "m1"}, Credential: Credential{APIKey: "k"}}}},
 			wantSubs: []string{"duplicate served model"},
 		},
 		{
 			name:     "missing credential",
-			cfg:      Config{Vendors: []Vendor{{Name: "a", BaseURL: "https://a.example.com", ServedModels: []string{"m1"}}}},
+			cfg:      Config{Vendors: []Vendor{{Name: "a", Origin: "https://a.example.com", ServedModels: []string{"m1"}}}},
 			wantSubs: []string{"credential api_key must be non-empty"},
 		},
 		{
 			name:     "missing api_key",
-			cfg:      Config{Vendors: []Vendor{{Name: "a", BaseURL: "https://a.example.com", ServedModels: []string{"m1"}, Credential: Credential{ID: "k1"}}}},
+			cfg:      Config{Vendors: []Vendor{{Name: "a", Origin: "https://a.example.com", ServedModels: []string{"m1"}, Credential: Credential{ID: "k1"}}}},
 			wantSubs: []string{"credential api_key must be non-empty"},
 		},
 		{
 			name: "price with empty unit",
 			cfg: Config{Vendors: []Vendor{
-				{Name: "a", BaseURL: "https://a.example.com", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"},
+				{Name: "a", Origin: "https://a.example.com", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"},
 					Prices: map[string]Price{"m1": {Input: 1.0, Output: 2.0}}},
 			}},
 			wantSubs: []string{"empty unit"},
@@ -210,7 +210,7 @@ func TestValidationFailures(t *testing.T) {
 		{
 			name:     "aggregates multiple problems",
 			cfg:      Config{Vendors: []Vendor{{Name: "", ServedModels: []string{}}}},
-			wantSubs: []string{"name must be non-empty", "base_url must be non-empty", "served_models must be non-empty", "credential api_key must be non-empty"},
+			wantSubs: []string{"name must be non-empty", "origin must be non-empty", "served_models must be non-empty", "credential api_key must be non-empty"},
 		},
 	}
 
@@ -233,7 +233,7 @@ func TestValidationFailures(t *testing.T) {
 func TestCaptureDefaults(t *testing.T) {
 	cfg := Config{
 		Vendors: []Vendor{
-			{Name: "a", BaseURL: "https://a.example.com", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"}},
+			{Name: "a", Origin: "https://a.example.com", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"}},
 		},
 	}
 	snap, err := Build(cfg)
@@ -252,7 +252,7 @@ func TestCaptureDefaults(t *testing.T) {
 func TestAdapterDefault(t *testing.T) {
 	cfg := Config{
 		Vendors: []Vendor{
-			{Name: "a", BaseURL: "https://a.example.com", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"}},
+			{Name: "a", Origin: "https://a.example.com", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"}},
 		},
 	}
 	snap, err := Build(cfg)
@@ -268,7 +268,7 @@ func TestAdapterDefault(t *testing.T) {
 func TestCredentialIDDefaultsToVendorName(t *testing.T) {
 	cfg := Config{
 		Vendors: []Vendor{
-			{Name: "my-vendor", BaseURL: "https://a.example.com", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"}},
+			{Name: "my-vendor", Origin: "https://a.example.com", ServedModels: []string{"m1"}, Credential: Credential{APIKey: "k"}},
 		},
 	}
 	snap, err := Build(cfg)

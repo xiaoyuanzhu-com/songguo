@@ -224,7 +224,7 @@ func TestChatHappyPath(t *testing.T) {
 	yaml := fmt.Sprintf(`
 vendors:
   - name: vendorA
-    base_url: %s/v1
+    origin: %s/v1
     served_models: [gpt-4o]
     priority: 1
     wires: [openai/chat, openai/completions, openai/embeddings, openai/models]
@@ -287,7 +287,7 @@ func TestEmbeddingsHappyPath(t *testing.T) {
 	yaml := fmt.Sprintf(`
 vendors:
   - name: emb
-    base_url: %s/v1
+    origin: %s/v1
     served_models: [text-embedding-3-small]
     priority: 1
     wires: [openai/embeddings, openai/models]
@@ -381,7 +381,7 @@ func TestBudgetExceeded(t *testing.T) {
 	yaml := fmt.Sprintf(`
 vendors:
   - name: vendorA
-    base_url: %s/v1
+    origin: %s/v1
     served_models: [gpt-4o]
     priority: 1
     wires: [openai/chat]
@@ -449,7 +449,7 @@ func TestFailover(t *testing.T) {
 	yaml := fmt.Sprintf(`
 vendors:
   - name: vendorA
-    base_url: %s/v1
+    origin: %s/v1
     served_models: [gpt-4o]
     priority: 1
     wires: [openai/chat]
@@ -457,7 +457,7 @@ vendors:
     prices:
       gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
   - name: vendorB
-    base_url: %s/v1
+    origin: %s/v1
     served_models: [gpt-4o]
     priority: 2
     wires: [openai/chat]
@@ -564,7 +564,7 @@ func TestStreaming(t *testing.T) {
 	yaml := fmt.Sprintf(`
 vendors:
   - name: vendorA
-    base_url: %s/v1
+    origin: %s/v1
     served_models: [gpt-4o]
     priority: 1
     wires: [openai/chat]
@@ -620,13 +620,13 @@ vendors:
 }
 
 // singleVendorYAML builds a one-vendor config serving gpt-4o. The mock upstream
-// is mounted at the host root, so we append /v1 to base_url and Mode-A's suffix
+// is mounted at the host root, so we put /v1 in the origin and Mode-A's suffix
 // (path minus /v1) lands the upstream call back on /chat/completions etc.
 func singleVendorYAML(baseURL, vendor, credID, apiKey string) string {
 	return fmt.Sprintf(`
 vendors:
   - name: %s
-    base_url: %s/v1
+    origin: %s/v1
     served_models: [gpt-4o]
     priority: 1
     wires: [openai/chat, openai/completions, openai/embeddings, openai/models]
@@ -728,7 +728,7 @@ func (e *testEnv) do(t *testing.T, method, path, token, body string) *http.Respo
 func TestModelRoutedNonV1Prefix(t *testing.T) {
 	// This mock ONLY serves /api/v3/chat/completions, mimicking 火山方舟/Ark whose
 	// OpenAI-compatible base is …/api/v3. A /v1/chat/completions request must land
-	// on /api/v3/chat/completions after the base_url + suffix rewrite.
+	// on /api/v3/chat/completions after the origin + suffix rewrite.
 	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v3/chat/completions" {
 			w.WriteHeader(http.StatusNotFound)
@@ -744,7 +744,7 @@ func TestModelRoutedNonV1Prefix(t *testing.T) {
 	yaml := fmt.Sprintf(`
 vendors:
   - name: ark
-    base_url: %s/api/v3
+    origin: %s/api/v3
     served_models: [doubao-pro-32k]
     priority: 1
     wires: [openai/chat]
@@ -797,16 +797,16 @@ func (p *pathRecorder) handler() http.HandlerFunc {
 	}
 }
 
-// passthroughYAML builds a one-vendor config for passthrough tests. base_url
-// carries a non-trivial path prefix (DashScope's /compatible-mode/v1); Mode B
-// must strip it and forward to the host origin. The native endpoints exercised
-// here have no phase-1 wire, so the vendor opts into allow_unmatched: calls
-// are forwarded but metered zero at unknown confidence.
+// passthroughYAML builds a one-vendor config for passthrough tests. Mode B
+// forwards the native path after /x/<vendor>/ to the vendor's origin (scheme://
+// host). The native endpoints exercised here have no phase-1 wire, so the vendor
+// opts into allow_unmatched: calls are forwarded but metered zero at unknown
+// confidence.
 func passthroughYAML(baseURL, vendor string) string {
 	return fmt.Sprintf(`
 vendors:
   - name: %s
-    base_url: %s/compatible-mode/v1
+    origin: %s
     served_models: [qwen-plus]
     priority: 1
     wires: [openai/chat]
@@ -842,8 +842,7 @@ func TestPassthroughNativeUsage(t *testing.T) {
 	gotAuth := rec.auth
 	rec.mu.Unlock()
 
-	// The base_url path prefix (/compatible-mode/v1) must be stripped: the native
-	// path is forwarded to the host origin verbatim.
+	// Mode B forwards the native path to the vendor origin verbatim.
 	if len(gotPaths) != 1 || gotPaths[0] != "/api/v1/services/aigc/text-generation/generation" {
 		t.Fatalf("upstream paths = %v, want [/api/v1/services/aigc/text-generation/generation]", gotPaths)
 	}
@@ -968,7 +967,7 @@ func TestPassthroughSingleAttempt(t *testing.T) {
 	yaml := fmt.Sprintf(`
 vendors:
   - name: bailian
-    base_url: %s/compatible-mode/v1
+    origin: %s/compatible-mode/v1
     served_models: [qwen-plus]
     priority: 1
     wires: [openai/chat]
@@ -1007,7 +1006,7 @@ func TestUnmatchedDenyModelRouted(t *testing.T) {
 	yaml := fmt.Sprintf(`
 vendors:
   - name: vendorA
-    base_url: %s/v1
+    origin: %s/v1
     served_models: [gpt-4o]
     priority: 1
     wires: [openai/embeddings]
@@ -1053,7 +1052,7 @@ func TestUnmatchedDenyPassthrough(t *testing.T) {
 	yaml := fmt.Sprintf(`
 vendors:
   - name: bailian
-    base_url: %s/compatible-mode/v1
+    origin: %s/compatible-mode/v1
     served_models: [qwen-plus]
     priority: 1
     wires: [openai/chat]
@@ -1129,7 +1128,7 @@ func anthropicYAML(baseURL string) string {
 	return fmt.Sprintf(`
 vendors:
   - name: anthro
-    base_url: %s/v1
+    origin: %s/v1
     adapter: anthropic-compatible
     served_models: [claude-x]
     priority: 1
@@ -1191,7 +1190,7 @@ func TestCachedInputPricing(t *testing.T) {
 	yaml := fmt.Sprintf(`
 vendors:
   - name: deepseek
-    base_url: %s/v1
+    origin: %s/v1
     served_models: [deepseek-v4-flash]
     priority: 1
     wires: [openai/chat]
@@ -1231,7 +1230,7 @@ func TestInjectStreamUsageQuirk(t *testing.T) {
 	yaml := fmt.Sprintf(`
 vendors:
   - name: vendorA
-    base_url: %s/v1
+    origin: %s/v1
     served_models: [gpt-4o]
     priority: 1
     wires: [openai/chat]
@@ -1268,5 +1267,46 @@ vendors:
 	_, _ = io.Copy(io.Discard, resp2.Body)
 	if string(up.lastBody) != plain {
 		t.Errorf("non-stream body changed: got %q want %q", up.lastBody, plain)
+	}
+}
+
+// A wire's full endpoint is used verbatim in Mode A: the inbound /v1/... suffix
+// is NOT re-appended, so a non-standard upstream path is honored. Also exercises
+// the wire allowlist being derived from the endpoints map (no explicit `wires:`).
+func TestModelRoutedFullEndpoint(t *testing.T) {
+	var gotPath string
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer mock.Close()
+
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: v
+    origin: %s
+    endpoints:
+      openai/chat: %s/weird/upstream/path
+    served_models: [gpt-4o]
+    priority: 1
+    credential: {id: c, api_key: k}
+    prices:
+      gpt-4o: { input: 1, output: 1, unit: per_1m_tokens }
+`, mock.URL, mock.URL)
+
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	resp := env.post(t, "/v1/chat/completions", key, `{"model":"gpt-4o","messages":[]}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	if gotPath != "/weird/upstream/path" {
+		t.Errorf("upstream path = %q, want /weird/upstream/path (full endpoint used as-is, suffix not appended)", gotPath)
 	}
 }

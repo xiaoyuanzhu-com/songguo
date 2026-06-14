@@ -20,12 +20,12 @@
 //
 //   - Model-routed (/v1/...): the ergonomic default for OpenAI-compatible SDKs.
 //     The model is read from the body, candidates span every vendor serving it
-//     (priority/weighted-RR/failover), and the upstream URL is the vendor's
-//     published base_url plus the path suffix after /v1.
+//     (priority/weighted-RR/failover), and the upstream URL is the matched wire's
+//     full endpoint (a {model} placeholder substituted, its query merged).
 //   - Passthrough (/x/<vendor>/...): the caller pins a vendor by name; no model
 //     is required (so model-less async polls work), failover is across that
 //     vendor's own credentials only, and the rest of the path is forwarded to
-//     the vendor's host origin (base_url with its path stripped).
+//     the vendor's origin (scheme://host).
 package proxy
 
 import (
@@ -366,8 +366,9 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 }
 
 // resolveModelRouted handles Mode A: model-routed traffic mounted at /v1/. The
-// upstream path is the request path with the /v1 mount prefix stripped,
-// appended to the vendor's published (version-inclusive) base_url.
+// upstream URL is the matched wire's full endpoint, used as-is ({model}
+// substituted, query merged). For an allow_unmatched path that resolves to no
+// wire, it falls back to the vendor origin plus the path suffix after /v1.
 func (h *handler) resolveModelRouted(w http.ResponseWriter, r *http.Request, user store.User, body []byte) (route, bool) {
 	suffix := strings.TrimPrefix(r.URL.Path, "/v1")
 
@@ -406,7 +407,14 @@ func (h *handler) resolveModelRouted(w http.ResponseWriter, r *http.Request, use
 		targets:  kept,
 		wires:    wires,
 		upstreamURL: func(t router.Target) string {
-			return joinQuery(strings.TrimRight(t.Vendor.BaseURL, "/")+suffix, r.URL.RawQuery)
+			if rw, ok := wires[t.Vendor.Name]; ok && rw.matched {
+				if ep, ok := t.Vendor.Endpoints[rw.wire.Name]; ok {
+					return buildUpstreamURL(ep, res.Model, r.URL.RawQuery)
+				}
+			}
+			// allow_unmatched (or a wire without a stored endpoint): forward to
+			// the vendor origin with the inbound path, as before.
+			return joinQuery(strings.TrimRight(t.Vendor.Origin, "/")+suffix, r.URL.RawQuery)
 		},
 	}, true
 }
@@ -414,9 +422,9 @@ func (h *handler) resolveModelRouted(w http.ResponseWriter, r *http.Request, use
 // resolvePassthrough handles Mode B: explicit-vendor passthrough mounted at
 // /x/<vendor>/<rest>. No model is required (this is what lets model-less calls
 // like async GET /api/v1/tasks/{id} polls through). The rest of the path is
-// appended to the vendor's host origin (base_url's scheme://host, path
-// stripped), so native/async/rerank endpoints are reachable. Failover is across
-// the named vendor's own credentials only.
+// appended to the vendor's origin (scheme://host), so native/async/rerank
+// endpoints are reachable. Failover is across the named vendor's own credentials
+// only.
 func (h *handler) resolvePassthrough(w http.ResponseWriter, r *http.Request, user store.User, body []byte, rest string) (route, bool) {
 	vendorName, rest, ok := strings.Cut(rest, "/")
 	if !ok || vendorName == "" || rest == "" {
@@ -443,12 +451,12 @@ func (h *handler) resolvePassthrough(w http.ResponseWriter, r *http.Request, use
 		return route{}, false
 	}
 
-	origin, err := originOf(vendor.BaseURL)
-	if err != nil {
-		h.logger.Error("vendor base_url invalid", "err", err, "vendor", vendorName)
-		writeError(w, http.StatusBadGateway, "upstream_error", "vendor base_url invalid")
+	if vendor.Origin == "" {
+		h.logger.Error("vendor has no origin", "vendor", vendorName)
+		writeError(w, http.StatusBadGateway, "upstream_error", "vendor origin invalid")
 		return route{}, false
 	}
+	origin := vendor.Origin
 
 	targets, err := h.router.CandidatesForVendor(vendorName)
 	if err != nil {
@@ -565,18 +573,32 @@ func joinQuery(u, rawQuery string) string {
 	return u + "?" + rawQuery
 }
 
-// originOf returns the scheme://host of a base URL, stripping any path so
-// passthrough can target native endpoints that live outside the vendor's
-// OpenAI-compatible path prefix.
-func originOf(base string) (string, error) {
-	u, err := url.Parse(base)
-	if err != nil {
-		return "", fmt.Errorf("parse base_url %q: %w", base, err)
+// buildUpstreamURL turns a wire's full endpoint into the concrete upstream URL:
+// it substitutes a {model} placeholder with the request's model and merges the
+// endpoint's own query (e.g. Azure's ?api-version=…) with the inbound query.
+func buildUpstreamURL(endpoint, model, inboundQuery string) string {
+	u := strings.ReplaceAll(endpoint, "{model}", url.PathEscape(model))
+	return mergeQuery(u, inboundQuery)
+}
+
+// mergeQuery appends inboundQuery to a URL that may already carry its own query
+// string. On key conflict the endpoint's configured params win over inbound ones
+// (the operator's intent, e.g. a pinned api-version). When the URL has no query,
+// it behaves like joinQuery.
+func mergeQuery(u, inboundQuery string) string {
+	if inboundQuery == "" {
+		return u
 	}
-	if u.Scheme == "" || u.Host == "" {
-		return "", fmt.Errorf("base_url %q missing scheme or host", base)
+	base, epQuery, hasQ := strings.Cut(u, "?")
+	if !hasQ {
+		return u + "?" + inboundQuery
 	}
-	return u.Scheme + "://" + u.Host, nil
+	merged, _ := url.ParseQuery(inboundQuery)
+	ep, _ := url.ParseQuery(epQuery)
+	for k, vs := range ep {
+		merged[k] = vs
+	}
+	return base + "?" + merged.Encode()
 }
 
 // captureConfig is the resolved, per-request capture decision plus the caps to

@@ -28,7 +28,7 @@ func TestCandidatesNoVendor(t *testing.T) {
 	snap := buildSnapshot(t, `
 vendors:
   - name: a
-    base_url: https://a.example
+    origin: https://a.example
     served_models: [gpt-4o]
     credential: {id: a1, api_key: k}
 `)
@@ -49,7 +49,7 @@ func TestCandidatesSingleVendor(t *testing.T) {
 	snap := buildSnapshot(t, `
 vendors:
   - name: a
-    base_url: https://a.example
+    origin: https://a.example
     served_models: [gpt-4o]
     credential: {id: a1, api_key: k}
 `)
@@ -67,7 +67,7 @@ func TestCredentialIDDefaultsToVendorName(t *testing.T) {
 	snap := buildSnapshot(t, `
 vendors:
   - name: a
-    base_url: https://a.example
+    origin: https://a.example
     served_models: [gpt-4o]
     credential: {api_key: k}
 `)
@@ -85,12 +85,12 @@ func TestPriorityOrdering(t *testing.T) {
 	snap := buildSnapshot(t, `
 vendors:
   - name: low
-    base_url: https://low.example
+    origin: https://low.example
     served_models: [m]
     priority: 2
     credential: {id: l1, api_key: k}
   - name: high
-    base_url: https://high.example
+    origin: https://high.example
     served_models: [m]
     priority: 1
     credential: {id: h1, api_key: k}
@@ -109,13 +109,13 @@ func TestWeightedRoundRobinDistribution(t *testing.T) {
 	snap := buildSnapshot(t, `
 vendors:
   - name: heavy
-    base_url: https://heavy.example
+    origin: https://heavy.example
     served_models: [m]
     priority: 1
     weight: 3
     credential: {id: h1, api_key: k}
   - name: light
-    base_url: https://light.example
+    origin: https://light.example
     served_models: [m]
     priority: 1
     weight: 1
@@ -143,12 +143,12 @@ func TestCooldownDemotesAndRestores(t *testing.T) {
 	snap := buildSnapshot(t, `
 vendors:
   - name: a
-    base_url: https://a.example
+    origin: https://a.example
     served_models: [m]
     priority: 1
     credential: {id: a1, api_key: k}
   - name: b
-    base_url: https://b.example
+    origin: https://b.example
     served_models: [m]
     priority: 1
     credential: {id: b1, api_key: k}
@@ -184,12 +184,12 @@ func TestCooldownExpiresWithClock(t *testing.T) {
 	snap := buildSnapshot(t, `
 vendors:
   - name: a
-    base_url: https://a.example
+    origin: https://a.example
     served_models: [m]
     priority: 1
     credential: {id: a1, api_key: k}
   - name: b
-    base_url: https://b.example
+    origin: https://b.example
     served_models: [m]
     priority: 1
     credential: {id: b1, api_key: k}
@@ -224,12 +224,12 @@ func TestAllCoolingStillReturnsAll(t *testing.T) {
 	snap := buildSnapshot(t, `
 vendors:
   - name: a
-    base_url: https://a.example
+    origin: https://a.example
     served_models: [m]
     priority: 1
     credential: {id: a1, api_key: k}
   - name: b
-    base_url: https://b.example
+    origin: https://b.example
     served_models: [m]
     priority: 1
     credential: {id: b1, api_key: k}
@@ -251,12 +251,12 @@ func TestReportTransportErrorCools(t *testing.T) {
 	snap := buildSnapshot(t, `
 vendors:
   - name: a
-    base_url: https://a.example
+    origin: https://a.example
     served_models: [m]
     priority: 1
     credential: {id: a1, api_key: k}
   - name: b
-    base_url: https://b.example
+    origin: https://b.example
     served_models: [m]
     priority: 1
     credential: {id: b1, api_key: k}
@@ -273,7 +273,7 @@ func TestCandidatesForVendor(t *testing.T) {
 	snap := buildSnapshot(t, `
 vendors:
   - name: bailian
-    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    origin: https://dashscope.aliyuncs.com/compatible-mode/v1
     served_models: [qwen-plus]
     credential: {id: c1, api_key: k1}
 `)
@@ -291,7 +291,7 @@ func TestCandidatesForVendorMissing(t *testing.T) {
 	snap := buildSnapshot(t, `
 vendors:
   - name: bailian
-    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    origin: https://dashscope.aliyuncs.com/compatible-mode/v1
     served_models: [qwen-plus]
     credential: {id: c1, api_key: k1}
 `)
@@ -312,13 +312,13 @@ func TestConcurrencySmoke(t *testing.T) {
 	snap := buildSnapshot(t, `
 vendors:
   - name: a
-    base_url: https://a.example
+    origin: https://a.example
     served_models: [m]
     priority: 1
     weight: 2
     credential: {id: a1, api_key: k}
   - name: b
-    base_url: https://b.example
+    origin: https://b.example
     served_models: [m]
     priority: 1
     weight: 1

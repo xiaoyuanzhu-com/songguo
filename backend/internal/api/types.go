@@ -183,7 +183,8 @@ type vendorStatsView struct {
 // vendorView is the JSON representation of a vendor (without secrets).
 type vendorView struct {
 	Name         string               `json:"name"`
-	BaseURL      string               `json:"base_url"`
+	Origin       string               `json:"origin"`
+	Endpoints    map[string]string    `json:"endpoints"`
 	ServedModels []string             `json:"served_models"`
 	Priority     int                  `json:"priority"`
 	Weight       int                  `json:"weight"`
@@ -207,6 +208,11 @@ func newVendorView(v config.Vendor, stat store.VendorStat, hasStat bool) vendorV
 		prices[model] = priceView{Input: p.Input, Output: p.Output, Unit: p.Unit}
 	}
 
+	endpoints := v.Endpoints
+	if endpoints == nil {
+		endpoints = map[string]string{}
+	}
+
 	sv := vendorStatsView{Healthy: true} // no traffic => healthy.
 	if hasStat {
 		sv.Requests = stat.Requests
@@ -221,7 +227,8 @@ func newVendorView(v config.Vendor, stat store.VendorStat, hasStat bool) vendorV
 
 	return vendorView{
 		Name:         v.Name,
-		BaseURL:      v.BaseURL,
+		Origin:       v.Origin,
+		Endpoints:    endpoints,
 		ServedModels: models,
 		Priority:     v.Priority,
 		Weight:       v.Weight,

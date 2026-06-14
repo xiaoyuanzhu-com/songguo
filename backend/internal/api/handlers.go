@@ -477,17 +477,17 @@ func (a *api) handleTestVendor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Probe the vendor's host origin (scheme://host), since base_url now carries
-	// a vendor-specific path prefix we can't assume an OpenAI /v1/models route on.
-	url, err := originOf(v.BaseURL)
-	if err != nil {
-		writeJSON(w, http.StatusOK, testVendorView{Reachable: false, Error: err.Error()})
+	// Probe the vendor's host origin (scheme://host); the per-wire endpoints
+	// carry vendor-specific paths we can't assume an OpenAI /v1/models route on.
+	origin := v.Origin
+	if origin == "" {
+		writeJSON(w, http.StatusOK, testVendorView{Reachable: false, Error: "vendor has no origin"})
 		return
 	}
 	ctx, cancel := contextWithTimeout(r, 5*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin, nil)
 	if err != nil {
 		writeJSON(w, http.StatusOK, testVendorView{Reachable: false, Error: err.Error()})
 		return

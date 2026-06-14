@@ -260,7 +260,7 @@ function AsrPanel({
     return (
       <p className={styles.hint}>
         No provider serving <code>{model}</code> has the <code>volc/asr</code> wire enabled. Add an
-        endpoint with wire <code>volc/asr</code> and base URL{' '}
+        endpoint with wire <code>volc/asr</code> and URL{' '}
         <code>https://openspeech.bytedance.com</code> on the{' '}
         <Link to="/providers">provider</Link> to test file recognition.
       </p>

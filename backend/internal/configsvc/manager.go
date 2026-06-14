@@ -15,7 +15,9 @@ package configsvc
 import (
 	"fmt"
 	"log/slog"
+	"net/url"
 	"sort"
+	"strings"
 	"sync/atomic"
 
 	"github.com/songguo/songguo/internal/config"
@@ -97,12 +99,12 @@ func (m *Manager) build() (*config.Snapshot, error) {
 }
 
 // vendorsFromProvider projects a stored provider into one or more config.Vendors
-// for routing: its endpoints are grouped by (base_url, adapter), and each group
-// becomes a vendor carrying that group's wires. Wire names not present in the
-// registry are dropped with a warning so a typo can never silently match. The
-// shared API key, models/prices, and quirks are replicated onto every group.
+// for routing: its endpoints are grouped by (origin, adapter), and each group
+// becomes a vendor carrying that group's wire→endpoint map. Wire names not present
+// in the registry are dropped with a warning so a typo can never silently match.
+// The shared API key, models/prices, and quirks are replicated onto every group.
 // The first group keeps the provider's name (so /x/<name> and stats stay stable
-// for single-endpoint providers); additional groups get an "-<adapter>" suffix.
+// for single-host providers); additional groups get an "-<adapter>" suffix.
 func vendorsFromProvider(pvd store.Provider, logger *slog.Logger) []config.Vendor {
 	models := make([]string, 0, len(pvd.Models))
 	prices := make(map[string]config.Price, len(pvd.Models))
@@ -115,31 +117,33 @@ func vendorsFromProvider(pvd store.Provider, logger *slog.Logger) []config.Vendo
 		prices[m.Model] = config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: unit}
 	}
 
-	// Group endpoints by (base_url, adapter).
-	type groupKey struct{ baseURL, adapter string }
+	// Group endpoints by (origin, adapter): a group shares a credential, auth
+	// scheme, and host. Each wire's full URL is kept verbatim for model-routed
+	// forwarding; the shared origin serves passthrough/WebSocket/unmatched.
+	type groupKey struct{ origin, adapter string }
 	order := make([]groupKey, 0, len(pvd.Endpoints))
-	groups := make(map[groupKey][]string)
+	groups := make(map[groupKey][]store.ProviderEndpoint)
 	for _, ep := range pvd.Endpoints {
 		if _, ok := wire.Get(ep.Wire); !ok {
 			logger.Warn("dropping unknown wire from provider endpoints", "provider", pvd.Name, "wire", ep.Wire)
 			continue
 		}
-		k := groupKey{ep.BaseURL, ep.Adapter}
+		k := groupKey{originOf(ep.Endpoint), ep.Adapter}
 		if _, seen := groups[k]; !seen {
 			order = append(order, k)
 		}
-		groups[k] = append(groups[k], ep.Wire)
+		groups[k] = append(groups[k], ep)
 	}
 
 	// Stable, intuitive primary: openai-compatible groups rank first, then by
-	// base URL. The primary group keeps the provider's plain name (so /x/<name>
+	// origin. The primary group keeps the provider's plain name (so /x/<name>
 	// and stats stay stable); others get a unique suffix.
 	sort.SliceStable(order, func(i, j int) bool {
 		ri, rj := adapterRank(order[i].adapter), adapterRank(order[j].adapter)
 		if ri != rj {
 			return ri < rj
 		}
-		return order[i].baseURL < order[j].baseURL
+		return order[i].origin < order[j].origin
 	})
 
 	vendors := make([]config.Vendor, 0, len(order))
@@ -156,21 +160,40 @@ func vendorsFromProvider(pvd store.Provider, logger *slog.Logger) []config.Vendo
 			}
 		}
 		usedNames[name] = struct{}{}
+		eps := groups[k]
+		endpoints := make(map[string]string, len(eps))
+		wires := make([]string, 0, len(eps))
+		for _, ep := range eps {
+			endpoints[ep.Wire] = ep.Endpoint
+			wires = append(wires, ep.Wire)
+		}
 		vendors = append(vendors, config.Vendor{
 			Name:           name,
-			BaseURL:        k.baseURL,
+			Origin:         k.origin,
 			Adapter:        k.adapter,
 			ServedModels:   models,
 			Priority:       pvd.Priority,
 			Weight:         pvd.Weight,
 			Credential:     config.Credential{ID: pvd.ID, APIKey: pvd.APIKey},
 			Prices:         prices,
-			Wires:          groups[k],
+			Wires:          wires,
+			Endpoints:      endpoints,
 			AllowUnmatched: pvd.AllowUnmatched,
 			Quirks:         pvd.Quirks,
 		})
 	}
 	return vendors
+}
+
+// originOf returns the scheme://host of a (possibly {model}-templated) endpoint
+// URL, dropping path and query. Empty on a parse failure — config validation
+// then rejects the malformed endpoint, so a bad value can't silently route.
+func originOf(raw string) string {
+	u, err := url.Parse(strings.ReplaceAll(raw, "{model}", "MODEL"))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 // adapterRank orders endpoint groups so the primary (name-keeping) group is

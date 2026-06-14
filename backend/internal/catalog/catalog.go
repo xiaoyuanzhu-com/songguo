@@ -32,16 +32,17 @@ type Vendor struct {
 	Endpoints []Endpoint        `json:"endpoints"`
 }
 
-// Endpoint is one preset wire bound to a base URL + adapter (auth scheme),
-// 1:1 with the wire. Models lists the model ids (keys into Vendor.Models) this
+// Endpoint is one preset wire bound to its full upstream URL + adapter (auth
+// scheme), 1:1 with the wire. The URL is used as-is by the proxy and may carry a
+// {model} placeholder. Models lists the model ids (keys into Vendor.Models) this
 // endpoint serves; companion wires like a model-listing endpoint carry none.
 type Endpoint struct {
-	Wire    string   `json:"wire"`
-	BaseURL string   `json:"base_url"`
-	Adapter string   `json:"adapter"`
-	Docs    string   `json:"docs,omitempty"`
-	Note    string   `json:"note,omitempty"`
-	Models  []string `json:"models,omitempty"`
+	Wire     string   `json:"wire"`
+	Endpoint string   `json:"endpoint"`
+	Adapter  string   `json:"adapter"`
+	Docs     string   `json:"docs,omitempty"`
+	Note     string   `json:"note,omitempty"`
+	Models   []string `json:"models,omitempty"`
 }
 
 // Model is a catalog model with its default price and descriptive metadata.

@@ -38,10 +38,10 @@ interface ModelRow {
   unit: string;
 }
 
-/** Editable endpoint row: one wire bound to a base URL (adapter derived). */
+/** Editable endpoint row: one wire bound to its full upstream URL (adapter derived). */
 interface EndpointRow {
   wire: string;
-  baseUrl: string;
+  endpoint: string;
 }
 
 function toRows(models: ProviderModel[] | undefined): ModelRow[] {
@@ -57,7 +57,7 @@ function toRows(models: ProviderModel[] | undefined): ModelRow[] {
 
 function toEndpointRows(endpoints: ProviderEndpoint[] | undefined): EndpointRow[] {
   if (!endpoints || endpoints.length === 0) return [];
-  return endpoints.map((e) => ({ wire: e.wire, baseUrl: e.base_url }));
+  return endpoints.map((e) => ({ wire: e.wire, endpoint: e.endpoint }));
 }
 
 export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: ProviderFormProps) {
@@ -83,7 +83,7 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
   const catalogId = editing?.catalog_id ?? '';
 
   const addEndpoint = () =>
-    setEndpoints((p) => [...p, { wire: wireOptions[0] ?? 'openai/chat', baseUrl: '' }]);
+    setEndpoints((p) => [...p, { wire: wireOptions[0] ?? 'openai/chat', endpoint: '' }]);
   const removeEndpoint = (i: number) => setEndpoints((p) => p.filter((_, idx) => idx !== i));
   const setEndpoint = (i: number, patch: Partial<EndpointRow>) =>
     setEndpoints((p) => p.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
@@ -126,15 +126,17 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
         return;
       }
       seenWires.add(w);
-      const url = row.baseUrl.trim();
+      const url = row.endpoint.trim();
       try {
-        const u = new URL(url);
+        // A {model} placeholder is substituted at request time; validate the
+        // shape with a probe so the braces don't trip the URL parser.
+        const u = new URL(url.replace('{model}', 'MODEL'));
         if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('scheme');
       } catch {
-        setErr(`Base URL for "${wireName(w)}" must be an absolute http(s) URL.`);
+        setErr(`Endpoint for "${wireName(w)}" must be an absolute http(s) URL.`);
         return;
       }
-      parsedEndpoints.push({ wire: w, base_url: url, adapter: wireAdapter(w) });
+      parsedEndpoints.push({ wire: w, endpoint: url, adapter: wireAdapter(w) });
     }
 
     const parsedModels: ProviderModel[] = [];
@@ -308,9 +310,10 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
           </button>
         </div>
         <span className={styles.hint}>
-          Each endpoint binds one wire to a base URL; the auth scheme is derived from the
-          wire. Requests matching no endpoint are denied (so every forwarded call has a
-          pricing rule).
+          Each endpoint binds one wire to its full upstream URL (used as-is); the auth
+          scheme is derived from the wire. A {'{model}'} placeholder is replaced with the
+          request&apos;s model. Requests matching no endpoint are denied (so every forwarded
+          call has a pricing rule).
         </span>
         {endpoints.length === 0 ? (
           <span className="muted" style={{ fontSize: 12.5 }}>
@@ -320,7 +323,7 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
           <div className={styles.modelRows}>
             <div className={`${styles.modelRow} ${styles.endpointRow} ${styles.modelHeader}`}>
               <span>Wire</span>
-              <span>Base URL</span>
+              <span>Endpoint</span>
               <span>Auth</span>
               <span />
             </div>
@@ -339,9 +342,9 @@ export function ProviderForm({ editing, onCancel, onSaved, onDeleted }: Provider
                 </select>
                 <input
                   className="input mono"
-                  value={row.baseUrl}
-                  placeholder="https://api.openai.com/v1"
-                  onChange={(e) => setEndpoint(i, { baseUrl: e.target.value })}
+                  value={row.endpoint}
+                  placeholder="https://api.openai.com/v1/chat/completions"
+                  onChange={(e) => setEndpoint(i, { endpoint: e.target.value })}
                 />
                 <span className="muted mono" style={{ fontSize: 11.5, alignSelf: 'center' }}>
                   {wireAdapter(row.wire)}
