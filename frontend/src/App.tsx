@@ -128,7 +128,8 @@ export function App() {
               <Route path="providers" element={<ProvidersPage />} />
               <Route path="providers/add" element={<Navigate to="/providers" replace />} />
               <Route path="providers/add/:vendorId" element={<VendorAddPage />} />
-              <Route path="providers/new" element={<ProviderNewPage />} />
+              <Route path="providers/new" element={<Navigate to="/providers/new/openai" replace />} />
+              <Route path="providers/new/:kind" element={<ProviderNewPage />} />
               <Route path="providers/:id/edit" element={<ProviderEditPage />} />
               <Route path="users" element={<UsersPage />} />
               <Route path="users/new" element={<UserNewPage />} />
