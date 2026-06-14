@@ -355,11 +355,12 @@ export function VendorAddPage() {
 }
 
 // Selection key for one (wire, model) checkbox. A space can't appear in a wire id
-// or model name, so it's a safe separator.
-const mkey = (wire: string, model: string) => `${wire} ${model}`;
+// or model name, so it's a safe separator. Shared with the edit form so it
+// pre-checks the same keys.
+export const mkey = (wire: string, model: string) => `${wire} ${model}`;
 
 /** Per-model price borrowed from the catalog for custom providers. */
-interface CatalogPrice {
+export interface CatalogPrice {
   input: number;
   output: number;
   cached_input: number;
@@ -368,7 +369,7 @@ interface CatalogPrice {
 
 // Flatten every catalog vendor's price list into one model-id → price index.
 // The first vendor to define a model id wins.
-function buildPriceIndex(catalog: Catalog | null | undefined): Record<string, CatalogPrice> {
+export function buildPriceIndex(catalog: Catalog | null | undefined): Record<string, CatalogPrice> {
   const index: Record<string, CatalogPrice> = {};
   for (const vendor of catalog?.vendors ?? []) {
     for (const [id, m] of Object.entries(vendor.models)) {
@@ -434,7 +435,7 @@ function customPrice(id: string, priceIndex: Record<string, CatalogPrice>): Prov
 // (non-model) wire sharing its (origin, adapter) group — the same grouping the
 // backend uses to form routing vendors — and only the selected models are priced.
 // `base` (non-null for custom templates) substitutes the {base} URL placeholder.
-function buildProvider(
+export function buildProvider(
   vendor: CatalogVendor,
   wireModels: Map<string, string[]>,
   priceModel: (id: string) => ProviderModel | null,
@@ -464,7 +465,7 @@ function buildProvider(
 
 // resolveEndpoint substitutes the {base} placeholder with the user's base URL
 // (trailing slashes trimmed). Catalog vendors pass base=null and are unchanged.
-function resolveEndpoint(endpoint: string, base: string | null): string {
+export function resolveEndpoint(endpoint: string, base: string | null): string {
   return base === null ? endpoint : endpoint.replace('{base}', base.replace(/\/+$/, ''));
 }
 
