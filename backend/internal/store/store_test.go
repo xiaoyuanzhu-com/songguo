@@ -55,6 +55,54 @@ func TestMigrationsIdempotent(t *testing.T) {
 	}
 }
 
+func TestEnsureAdminUser(t *testing.T) {
+	s := openTestStore(t)
+
+	// Empty key is a no-op (admin API runs unprotected).
+	if err := s.EnsureAdminUser(""); err != nil {
+		t.Fatalf("EnsureAdminUser(\"\"): %v", err)
+	}
+	if users, _ := s.ListUsers(); len(users) != 0 {
+		t.Fatalf("expected no users for empty admin key, got %d", len(users))
+	}
+
+	// Seeding makes the admin key authenticate proxy traffic via GetUserByKey.
+	if err := s.EnsureAdminUser("admin-secret-1"); err != nil {
+		t.Fatalf("EnsureAdminUser: %v", err)
+	}
+	u, err := s.GetUserByKey("admin-secret-1")
+	if err != nil {
+		t.Fatalf("GetUserByKey after seed: %v", err)
+	}
+	if u.ID != AdminUserID {
+		t.Fatalf("admin user id = %q, want %q", u.ID, AdminUserID)
+	}
+	if u.Budget != nil {
+		t.Fatalf("admin user should have unlimited budget, got %v", *u.Budget)
+	}
+
+	// Idempotent: re-seeding the same key keeps exactly one admin user.
+	if err := s.EnsureAdminUser("admin-secret-1"); err != nil {
+		t.Fatalf("re-seed: %v", err)
+	}
+
+	// Re-pointing: a changed admin key updates the hash; the old key stops working.
+	if err := s.EnsureAdminUser("admin-secret-2"); err != nil {
+		t.Fatalf("re-point: %v", err)
+	}
+	if _, err := s.GetUserByKey("admin-secret-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("old admin key should no longer resolve, got %v", err)
+	}
+	if _, err := s.GetUserByKey("admin-secret-2"); err != nil {
+		t.Fatalf("new admin key should resolve: %v", err)
+	}
+
+	users, _ := s.ListUsers()
+	if len(users) != 1 {
+		t.Fatalf("expected exactly one admin user, got %d", len(users))
+	}
+}
+
 func TestUserLifecycle(t *testing.T) {
 	s := openTestStore(t)
 

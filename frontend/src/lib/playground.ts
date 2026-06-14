@@ -1,6 +1,6 @@
 // Build, send, and summarize interactive test calls for the service
 // playground. Requests go through the real /v1 (or /x for media wires) proxy
-// with a consumer user key, so a test exercises auth, routing, failover, and
+// with the signed-in key, so a test exercises auth, routing, failover, and
 // metering exactly like SDK traffic — and shows up in the call log and usage
 // stats.
 //
@@ -8,24 +8,6 @@
 // test profile (which panel renders, which endpoint it hits). See wireTests.
 
 import { wireKind, wireName } from './wires';
-
-const TEST_KEY_STORAGE = 'songguo_test_key';
-
-export function getTestKey(): string {
-  try {
-    return localStorage.getItem(TEST_KEY_STORAGE) ?? '';
-  } catch {
-    return '';
-  }
-}
-
-export function setTestKey(key: string): void {
-  try {
-    localStorage.setItem(TEST_KEY_STORAGE, key);
-  } catch {
-    /* ignore storage failures */
-  }
-}
 
 // --- Per-wire test profiles ------------------------------------------------
 

@@ -43,6 +43,13 @@ func main() {
 	}
 	defer st.Close()
 
+	// Mirror the admin key as a consumer user so it authenticates proxied
+	// service calls too (the dashboard playground signs in with the admin key).
+	if err := st.EnsureAdminUser(adminKey); err != nil {
+		logger.Error("failed to seed admin user", "err", err)
+		os.Exit(1)
+	}
+
 	manager, err := configsvc.NewManager(st, logger)
 	if err != nil {
 		logger.Error("failed to build config", "err", err)

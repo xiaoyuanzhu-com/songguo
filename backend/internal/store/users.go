@@ -129,6 +129,39 @@ func (s *Store) CreateUser(nu NewUser) (User, string, error) {
 	}, key, nil
 }
 
+// AdminUserID is the fixed id of the seeded admin user whose API key mirrors
+// the admin key. Seeding it lets the single admin key authenticate both the
+// management API and proxied service calls (GetUserByKey).
+const AdminUserID = "admin"
+
+// EnsureAdminUser seeds (or refreshes) the admin user whose API key is the
+// admin key, so that one key works for both management and service calls. The
+// admin user has an unlimited budget and no scope restrictions. It is
+// idempotent and re-points the key hash if the admin key changed; an empty key
+// is a no-op (the admin API runs unprotected, so there is no key to mirror).
+func (s *Store) EnsureAdminUser(plaintext string) error {
+	if plaintext == "" {
+		return nil
+	}
+	prefix := plaintext
+	if len(prefix) > keyPrefixLen {
+		prefix = prefix[:keyPrefixLen]
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO users (id, name, key_hash, key_prefix, budget, scope, rpm, capture, created_at, revoked_at)
+		 VALUES (?, ?, ?, ?, NULL, '[]', 0, NULL, ?, NULL)
+		 ON CONFLICT(id) DO UPDATE SET
+		   key_hash = excluded.key_hash,
+		   key_prefix = excluded.key_prefix,
+		   revoked_at = NULL`,
+		AdminUserID, "Admin", HashKey(plaintext), prefix, time.Now().Unix(),
+	)
+	if err != nil {
+		return fmt.Errorf("store: ensure admin user: %w", err)
+	}
+	return nil
+}
+
 // userSelect is the shared column list for scanning a User.
 const userSelect = `SELECT id, name, key_prefix, budget, scope, rpm, capture, created_at, revoked_at FROM users`
 

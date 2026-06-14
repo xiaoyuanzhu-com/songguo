@@ -1,13 +1,11 @@
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { Send } from 'lucide-react';
 import type { Provider } from '../api/types';
+import { getAdminKey } from '../api/client';
 import {
   buildTestRequest,
-  getTestKey,
   runAsr,
   runTest,
-  setTestKey,
   wireTests,
   type AsrResult,
   type TestResult,
@@ -44,12 +42,15 @@ function providerWires(p: Provider, modelWires: string[]): string[] {
  * Interactive test UI for one service. The flow is provider-first, then wire:
  * a model may be served by several providers, so the test pins one provider
  * (X-Songguo-Provider) and offers only the wires that provider serves for this
- * model. Each selector collapses when there is a single option. Requests go
- * through the real proxy with a consumer user key, so a test is routed and
- * metered like any SDK call and shows up in the call log.
+ * model. Both selectors are always shown, even with a single option, so the
+ * routing and API in play are explicit. Requests go through the real proxy with
+ * the signed-in key, so a test is routed and metered like any SDK call and shows
+ * up in the call log.
  */
 export function Playground({ model, wires, providers }: PlaygroundProps) {
-  const [key, setKey] = useState(getTestKey);
+  // The signed-in admin key doubles as a consumer key (the backend seeds an
+  // admin user with the same key), so tests reuse it instead of a separate key.
+  const apiKey = getAdminKey();
 
   // Only providers with at least one interactively-testable wire for this model.
   const servable = useMemo(
@@ -92,26 +93,24 @@ export function Playground({ model, wires, providers }: PlaygroundProps) {
         <h3 className={styles.title}>Test</h3>
       </div>
 
-      {tests.length > 1 && (
-        <div className={styles.selectorRow}>
-          <span className={styles.selectorLabel}>API</span>
-          <Select
-            value={test.wire}
-            onValueChange={(w) => setActive(tests.findIndex((t) => t.wire === w))}
-          >
-            <SelectTrigger className={styles.selectorSelect} aria-label="API to test">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {tests.map((t) => (
-                <SelectItem key={t.wire} value={t.wire}>
-                  {t.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
+      <div className={styles.selectorRow}>
+        <span className={styles.selectorLabel}>API</span>
+        <Select
+          value={test.wire}
+          onValueChange={(w) => setActive(tests.findIndex((t) => t.wire === w))}
+        >
+          <SelectTrigger className={styles.selectorSelect} aria-label="API to test">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {tests.map((t) => (
+              <SelectItem key={t.wire} value={t.wire}>
+                {t.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
 
       <div className={styles.selectorRow}>
         <span className={styles.selectorLabel}>Routing</span>
@@ -136,31 +135,8 @@ export function Playground({ model, wires, providers }: PlaygroundProps) {
         </Select>
       </div>
 
-      <KeyInput value={key} onChange={setKey} />
-
-      <Panel test={test} model={model} apiKey={key} provider={provider} providers={servable} />
+      <Panel test={test} model={model} apiKey={apiKey} provider={provider} providers={servable} />
     </div>
-  );
-}
-
-function KeyInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  return (
-    <>
-      <p className={styles.hint}>
-        Sends a real request through the gateway with a user key (created on the{' '}
-        <Link to="/users">Users</Link> page), so it is routed and metered like any SDK call.
-      </p>
-      <div className={styles.keyRow}>
-        <input
-          className={`input ${styles.keyInput}`}
-          type="password"
-          placeholder="User key (sk-…)"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          autoComplete="off"
-        />
-      </div>
-    </>
   );
 }
 
@@ -225,7 +201,6 @@ function PromptPanel({
     if (!canSend) return;
     setSending(true);
     setShowRaw(false);
-    setTestKey(apiKey.trim());
     const req = buildTestRequest(model, test.wire, prompt);
     const res = await runTest(apiKey.trim(), req, providerId);
     setResult(res);
@@ -313,7 +288,6 @@ function AsrPanel({
     if (!canSend) return;
     setRunning(true);
     setShowRaw(false);
-    setTestKey(apiKey.trim());
     const res = await runAsr({
       key: apiKey.trim(),
       providerId,
