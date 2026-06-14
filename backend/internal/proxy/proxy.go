@@ -398,6 +398,26 @@ func (h *handler) resolveModelRouted(w http.ResponseWriter, r *http.Request, use
 		return route{}, false
 	}
 
+	// Optional provider pin: a caller (the dashboard test panel) can constrain
+	// model-routed traffic to one configured provider by its id, so a model
+	// served by several providers can be exercised one provider at a time
+	// without losing the real /v1 routing/metering path. Every vendor derived
+	// from a provider carries that provider's id as its credential id, so the
+	// pin survives the (origin, adapter) vendor split.
+	if pin := r.Header.Get("X-Songguo-Provider"); pin != "" {
+		var only []router.Target
+		for _, t := range targets {
+			if t.Credential.ID == pin {
+				only = append(only, t)
+			}
+		}
+		if len(only) == 0 {
+			writeError(w, http.StatusBadGateway, "no_upstream", "requested provider does not serve this model")
+			return route{}, false
+		}
+		targets = only
+	}
+
 	kept, wires, denied := resolveWires(targets, r.Method, suffix)
 	if len(kept) == 0 {
 		h.denyUnmatched(w, r, user.ID, res.Model, suffix, denied)
@@ -502,6 +522,9 @@ func (h *handler) buildUpstreamRequest(r *http.Request, t router.Target, upURL s
 		return nil, fmt.Errorf("new upstream request: %w", err)
 	}
 	copyHeaders(upReq.Header, r.Header)
+	// X-Songguo-Provider is a gateway-internal routing hint (provider pin); it
+	// has no meaning to the upstream vendor, so don't leak it.
+	upReq.Header.Del("X-Songguo-Provider")
 	upReq.ContentLength = int64(len(body))
 	applyUpstreamAuth(upReq, t.Vendor.Adapter, t.Credential.APIKey)
 	return upReq, nil

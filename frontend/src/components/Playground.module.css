@@ -132,38 +132,23 @@
   white-space: pre;
 }
 
-/* Wire picker: a segmented tab row when a service has several testable wires. */
-.wirePicker {
+/* Labeled selector row: a title on the left, its control on the same line. */
+.selectorRow {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-bottom: 12px;
-  padding: 3px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
 }
 
-.wireTab {
-  padding: 5px 12px;
-  border: none;
-  background: none;
-  border-radius: calc(var(--radius-control) - 2px);
-  font-size: 12.5px;
+.selectorLabel {
+  flex: none;
+  width: 56px;
+  font-size: 11.5px;
   color: var(--text-muted);
-  cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
 }
 
-.wireTab:hover {
-  color: var(--text);
-}
-
-.wireTabActive,
-.wireTabActive:hover {
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.06));
+.selectorSelect {
+  flex: 1 1 auto;
 }
 
 /* ASR parameter row. */

@@ -1,0 +1,38 @@
+/* Tailwind v4 utilities for shadcn/ui components.
+
+   Preflight is intentionally NOT imported — the app has its own reset and base
+   typography in global.css, which Tailwind's reset would fight. We pull in only
+   the theme and utilities layers (plus tw-animate-css for the enter/exit
+   animations shadcn components use). The per-element `--tw-*` initializers that
+   ring/shadow/transform utilities need are registered by v4 via @property, so
+   skipping preflight is safe here. */
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+@import 'tw-animate-css';
+
+/* Map `dark:` to the app's existing theme switch (data-theme on <html>). Most
+   shadcn components instead read the semantic colors below, which flip on their
+   own, but this keeps explicit dark: utilities correct too. */
+@custom-variant dark (&:where([data-theme='dark'] *));
+
+/* shadcn's semantic tokens, mapped onto the app's existing CSS variables. `inline`
+   makes utilities reference the variables live, so colors flip with
+   [data-theme="dark"] for free (global.css redefines them under that selector). */
+@theme inline {
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-ring: var(--accent);
+  --color-background: var(--surface);
+  --color-foreground: var(--text);
+  --color-popover: var(--surface);
+  --color-popover-foreground: var(--text);
+  --color-accent: var(--surface-2);
+  --color-accent-foreground: var(--text);
+  --color-muted: var(--border);
+  --color-muted-foreground: var(--text-muted);
+
+  --radius-sm: calc(var(--radius-control) - 2px);
+  --radius-md: calc(var(--radius-control) - 1px);
+  --radius-lg: var(--radius-control);
+}

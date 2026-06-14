@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { api, clearAdminKey, getAdminKey, onUnauthorized } from './api/client';
 import type { Settings } from './api/types';
@@ -7,17 +7,27 @@ import { Gate } from './components/Gate';
 import { Layout } from './components/Layout';
 import { ToastProvider } from './components/Toast';
 import { SettingsContext } from './lib/settingsContext';
-import { OverviewPage } from './pages/Overview';
-import { ServicesPage } from './pages/Services';
-import { ServiceDetailPage } from './pages/ServiceDetail';
-import { ProvidersPage } from './pages/Providers';
-import { VendorAddPage } from './pages/VendorAdd';
-import { ProviderNewPage } from './pages/ProviderNew';
-import { ProviderEditPage } from './pages/ProviderEdit';
-import { UsersPage } from './pages/Users';
-import { UserNewPage } from './pages/UserNew';
-import { UserEditPage } from './pages/UserEdit';
-import { SettingsPage } from './pages/SettingsPage';
+
+// Routes are split into their own chunks so heavy page-only deps (charts on
+// Overview, the Radix Select on a service detail, etc.) don't weigh down the
+// initial bundle. The pages use named exports, so map them onto `default`.
+const OverviewPage = lazy(() => import('./pages/Overview').then((m) => ({ default: m.OverviewPage })));
+const ServicesPage = lazy(() => import('./pages/Services').then((m) => ({ default: m.ServicesPage })));
+const ServiceDetailPage = lazy(() =>
+  import('./pages/ServiceDetail').then((m) => ({ default: m.ServiceDetailPage })),
+);
+const ProvidersPage = lazy(() => import('./pages/Providers').then((m) => ({ default: m.ProvidersPage })));
+const VendorAddPage = lazy(() => import('./pages/VendorAdd').then((m) => ({ default: m.VendorAddPage })));
+const ProviderNewPage = lazy(() =>
+  import('./pages/ProviderNew').then((m) => ({ default: m.ProviderNewPage })),
+);
+const ProviderEditPage = lazy(() =>
+  import('./pages/ProviderEdit').then((m) => ({ default: m.ProviderEditPage })),
+);
+const UsersPage = lazy(() => import('./pages/Users').then((m) => ({ default: m.UsersPage })));
+const UserNewPage = lazy(() => import('./pages/UserNew').then((m) => ({ default: m.UserNewPage })));
+const UserEditPage = lazy(() => import('./pages/UserEdit').then((m) => ({ default: m.UserEditPage })));
+const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 
 type Phase =
   | { kind: 'loading' }

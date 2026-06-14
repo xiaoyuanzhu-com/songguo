@@ -138,17 +138,28 @@ export interface TestResult {
   raw: string;
 }
 
-/** Send a test request with the consumer user key and summarize the outcome. */
-export async function runTest(key: string, req: TestRequest): Promise<TestResult> {
+/**
+ * Send a test request with the consumer user key and summarize the outcome.
+ * When providerId is given, pin the request to that provider so a model served
+ * by several providers is exercised one provider at a time (the gateway honors
+ * X-Songguo-Provider on model-routed traffic).
+ */
+export async function runTest(
+  key: string,
+  req: TestRequest,
+  providerId?: string,
+): Promise<TestResult> {
   const start = performance.now();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${key}`,
+  };
+  if (providerId) headers['X-Songguo-Provider'] = providerId;
   let res: Response;
   try {
     res = await fetch(req.path, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${key}`,
-      },
+      headers,
       body: JSON.stringify(req.body),
     });
   } catch (e) {

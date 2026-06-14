@@ -15,70 +15,130 @@ import {
 } from '../lib/playground';
 import { int, ms } from '../lib/format';
 import { CopyButton } from './CopyButton';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from './ui/select';
 import styles from './Playground.module.css';
 
 interface PlaygroundProps {
   model: string;
-  /** Union of wires enabled on the providers serving this model. */
+  /** Wires that serve this model (catalog-filtered union across providers). */
   wires: string[];
-  /** Provider objects serving this model (for /x media wire mounts). */
+  /** Provider objects serving this model. */
   providers: Provider[];
 }
 
+/** Routing sentinel for "let the gateway pick" (Radix Select forbids ""). */
+const AUTO = '__auto__';
+
+/** The wires a single provider exposes that actually serve this model. */
+function providerWires(p: Provider, modelWires: string[]): string[] {
+  return p.endpoints.map((e) => e.wire).filter((w) => modelWires.includes(w));
+}
+
 /**
- * Interactive test UI for one service. The panel is wire-aware: each
- * model-serving wire gets a test profile, and the active wire decides which
- * panel renders (chat, embeddings, ASR, …) — not every wire is OpenAI chat.
- * Requests go through the real proxy with a consumer user key, so a test is
- * routed and metered like any SDK call and shows up in the call log.
+ * Interactive test UI for one service. The flow is provider-first, then wire:
+ * a model may be served by several providers, so the test pins one provider
+ * (X-Songguo-Provider) and offers only the wires that provider serves for this
+ * model. Each selector collapses when there is a single option. Requests go
+ * through the real proxy with a consumer user key, so a test is routed and
+ * metered like any SDK call and shows up in the call log.
  */
 export function Playground({ model, wires, providers }: PlaygroundProps) {
-  const tests = useMemo(() => wireTests(wires), [wires]);
   const [key, setKey] = useState(getTestKey);
-  const [active, setActive] = useState(0);
 
-  if (tests.length === 0) {
+  // Only providers with at least one interactively-testable wire for this model.
+  const servable = useMemo(
+    () => providers.filter((p) => wireTests(providerWires(p, wires)).length > 0),
+    [providers, wires],
+  );
+
+  // Routing: AUTO = let the gateway pick a provider; otherwise pin to a provider
+  // id. Auto is the default and lets a test exercise the real routing. (Radix
+  // Select forbids an empty-string value, so Auto uses a sentinel that no
+  // provider id equals, which `find` resolves to undefined — i.e. no pin.)
+  const [providerId, setProviderId] = useState(AUTO);
+  const provider = servable.find((p) => p.id === providerId);
+
+  // The APIs offered depend on routing: the full model union under Auto, or
+  // only the pinned provider's wires.
+  const tests = useMemo(
+    () => wireTests(provider ? providerWires(provider, wires) : wires),
+    [provider, wires],
+  );
+  const [active, setActive] = useState(0);
+  const test = tests[Math.min(active, tests.length - 1)];
+
+  if (servable.length === 0 || !test) {
     return (
       <div className={`card ${styles.section}`}>
         <div className={styles.head}>
           <h3 className={styles.title}>Test</h3>
         </div>
         <p className={styles.hint}>
-          This service exposes no model-serving wire to test interactively.
+          No provider serving this model exposes a model-serving wire to test interactively.
         </p>
       </div>
     );
   }
 
-  const test = tests[Math.min(active, tests.length - 1)];
-
   return (
     <div className={`card ${styles.section}`}>
       <div className={styles.head}>
         <h3 className={styles.title}>Test</h3>
-        {test.endpoint && <code className={styles.endpoint}>{test.endpoint}</code>}
       </div>
 
       {tests.length > 1 && (
-        <div className={styles.wirePicker} role="tablist" aria-label="Wire to test">
-          {tests.map((t, i) => (
-            <button
-              key={t.wire}
-              type="button"
-              role="tab"
-              aria-selected={i === active}
-              className={`${styles.wireTab} ${i === active ? styles.wireTabActive : ''}`}
-              onClick={() => setActive(i)}
-            >
-              {t.label}
-            </button>
-          ))}
+        <div className={styles.selectorRow}>
+          <span className={styles.selectorLabel}>API</span>
+          <Select
+            value={test.wire}
+            onValueChange={(w) => setActive(tests.findIndex((t) => t.wire === w))}
+          >
+            <SelectTrigger className={styles.selectorSelect} aria-label="API to test">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {tests.map((t) => (
+                <SelectItem key={t.wire} value={t.wire}>
+                  {t.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       )}
 
+      <div className={styles.selectorRow}>
+        <span className={styles.selectorLabel}>Routing</span>
+        <Select
+          value={providerId}
+          onValueChange={(v) => {
+            setProviderId(v);
+            setActive(0);
+          }}
+        >
+          <SelectTrigger className={styles.selectorSelect} aria-label="Routing">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={AUTO}>Auto</SelectItem>
+            {servable.map((p) => (
+              <SelectItem key={p.id} value={p.id}>
+                {p.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
       <KeyInput value={key} onChange={setKey} />
 
-      <Panel test={test} model={model} apiKey={key} providers={providers} />
+      <Panel test={test} model={model} apiKey={key} provider={provider} providers={servable} />
     </div>
   );
 }
@@ -104,24 +164,33 @@ function KeyInput({ value, onChange }: { value: string; onChange: (v: string) =>
   );
 }
 
-/** Dispatch to the panel for the active wire's kind. */
+/**
+ * Dispatch to the panel for the active wire's kind. provider is the pinned
+ * provider, or undefined under Auto routing (the gateway picks). Passthrough
+ * wires (ASR) need a concrete provider, so under Auto they fall back to the
+ * first servable provider that exposes the wire.
+ */
 function Panel({
   test,
   model,
   apiKey,
+  provider,
   providers,
 }: {
   test: WireTest;
   model: string;
   apiKey: string;
+  provider?: Provider;
   providers: Provider[];
 }) {
   switch (test.kind) {
     case 'chat':
     case 'embedding':
-      return <PromptPanel test={test} model={model} apiKey={apiKey} />;
-    case 'asr':
-      return <AsrPanel model={model} apiKey={apiKey} providers={providers} />;
+      return <PromptPanel test={test} model={model} apiKey={apiKey} providerId={provider?.id} />;
+    case 'asr': {
+      const p = provider ?? providers.find((pp) => pp.endpoints.some((e) => e.wire === test.wire));
+      return <AsrPanel apiKey={apiKey} providerName={p?.name ?? ''} />;
+    }
     default:
       return <UnsupportedPanel test={test} model={model} />;
   }
@@ -129,7 +198,17 @@ function Panel({
 
 // --- Chat / embedding panel ------------------------------------------------
 
-function PromptPanel({ test, model, apiKey }: { test: WireTest; model: string; apiKey: string }) {
+function PromptPanel({
+  test,
+  model,
+  apiKey,
+  providerId,
+}: {
+  test: WireTest;
+  model: string;
+  apiKey: string;
+  providerId?: string;
+}) {
   const isEmbedding = test.kind === 'embedding';
   const [prompt, setPrompt] = useState(
     isEmbedding
@@ -148,7 +227,7 @@ function PromptPanel({ test, model, apiKey }: { test: WireTest; model: string; a
     setShowRaw(false);
     setTestKey(apiKey.trim());
     const req = buildTestRequest(model, test.wire, prompt);
-    const res = await runTest(apiKey.trim(), req);
+    const res = await runTest(apiKey.trim(), req, providerId);
     setResult(res);
     setSending(false);
   };
@@ -215,20 +294,12 @@ function ResultMeta({ result }: { result: TestResult }) {
 const ASR_FORMATS = ['wav', 'mp3', 'm4a', 'ogg', 'flac', 'pcm'];
 
 function AsrPanel({
-  model,
   apiKey,
-  providers,
+  providerName,
 }: {
-  model: string;
   apiKey: string;
-  providers: Provider[];
+  providerName: string;
 }) {
-  // Only providers that actually expose the ASR wire can serve this test.
-  const asrProviders = useMemo(
-    () => providers.filter((p) => p.endpoints.some((e) => e.wire === 'volc/asr')),
-    [providers],
-  );
-  const [providerName, setProviderName] = useState(asrProviders[0]?.name ?? '');
   const [audioUrl, setAudioUrl] = useState('');
   const [format, setFormat] = useState('wav');
   const [resourceId, setResourceId] = useState('volc.seedasr.auc');
@@ -236,9 +307,7 @@ function AsrPanel({
   const [result, setResult] = useState<AsrResult | null>(null);
   const [showRaw, setShowRaw] = useState(false);
 
-  const provider = providerName || asrProviders[0]?.name || '';
-  const canSend =
-    apiKey.trim() !== '' && audioUrl.trim() !== '' && provider !== '' && !running;
+  const canSend = apiKey.trim() !== '' && audioUrl.trim() !== '' && !running;
 
   const send = async () => {
     if (!canSend) return;
@@ -247,7 +316,7 @@ function AsrPanel({
     setTestKey(apiKey.trim());
     const res = await runAsr({
       key: apiKey.trim(),
-      providerName: provider,
+      providerName,
       resourceId: resourceId.trim() || 'volc.seedasr.auc',
       audioUrl: audioUrl.trim(),
       format,
@@ -255,17 +324,6 @@ function AsrPanel({
     setResult(res);
     setRunning(false);
   };
-
-  if (asrProviders.length === 0) {
-    return (
-      <p className={styles.hint}>
-        No provider serving <code>{model}</code> has the <code>volc/asr</code> wire enabled. Add an
-        endpoint with wire <code>volc/asr</code> and URL{' '}
-        <code>https://openspeech.bytedance.com</code> on the{' '}
-        <Link to="/providers">provider</Link> to test file recognition.
-      </p>
-    );
-  }
 
   return (
     <>
@@ -276,22 +334,6 @@ function AsrPanel({
       </p>
 
       <div className={styles.fieldGrid}>
-        {asrProviders.length > 1 && (
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>Provider</span>
-            <select
-              className="select"
-              value={provider}
-              onChange={(e) => setProviderName(e.target.value)}
-            >
-              {asrProviders.map((p) => (
-                <option key={p.id} value={p.name}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
         <label className={styles.field}>
           <span className={styles.fieldLabel}>Format</span>
           <select className="select" value={format} onChange={(e) => setFormat(e.target.value)}>

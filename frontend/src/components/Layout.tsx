@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { Suspense, type ReactNode } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { Activity, Layers, Plug, Settings, Users } from 'lucide-react';
 import styles from './Layout.module.css';
@@ -36,7 +36,17 @@ export function Layout() {
         </nav>
       </aside>
       <main className={styles.main}>
-        <Outlet />
+        {/* Each route is a lazy chunk; keep the shell and show a spinner in the
+            page area while the chunk loads. */}
+        <Suspense
+          fallback={
+            <div className={styles.routeFallback}>
+              <span className="spinner" />
+            </div>
+          }
+        >
+          <Outlet />
+        </Suspense>
       </main>
     </div>
   );

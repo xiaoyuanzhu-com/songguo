@@ -138,6 +138,24 @@ func (e *testEnv) post(t *testing.T, path, token, body string) *http.Response {
 	return resp
 }
 
+// postPinned is post with an X-Songguo-Provider pin header, constraining
+// model-routed candidates to the provider whose credential id is providerID.
+func (e *testEnv) postPinned(t *testing.T, path, token, providerID, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, e.server.URL+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Songguo-Provider", providerID)
+	resp, err := e.client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	return resp
+}
+
 func (e *testEnv) callRows(t *testing.T) []callRow {
 	t.Helper()
 	entries, err := e.store.QueryCalls(storeFilterAll())
@@ -501,6 +519,75 @@ vendors:
 	}
 	if bRow == nil || bRow.Status != 200 || bRow.Attempt != 2 {
 		t.Errorf("vendorB row = %+v, want status 200 attempt 2", bRow)
+	}
+}
+
+// --- Provider pin: X-Songguo-Provider constrains model-routed candidates ---
+
+func TestProviderPin(t *testing.T) {
+	upA := &mockUpstream{}
+	mockA := httptest.NewServer(upA.handler())
+	defer mockA.Close()
+	upB := &mockUpstream{}
+	mockB := httptest.NewServer(upB.handler())
+	defer mockB.Close()
+
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: vendorA
+    origin: %s/v1
+    served_models: [gpt-4o]
+    priority: 1
+    wires: [openai/chat]
+    credential: {id: credA, api_key: keyA}
+    prices:
+      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+  - name: vendorB
+    origin: %s/v1
+    served_models: [gpt-4o]
+    priority: 1
+    wires: [openai/chat]
+    credential: {id: credB, api_key: keyB}
+    prices:
+      gpt-4o: { input: 2.50, output: 10.00, unit: per_1m_tokens }
+`, mockA.URL, mockB.URL)
+
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	// Pin to vendorB's provider (credential id credB): only B is tried, even
+	// though both vendors share priority and serve the model.
+	resp := env.postPinned(t, "/v1/chat/completions", key, "credB", `{"model":"gpt-4o","messages":[]}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if upB.calls != 1 {
+		t.Errorf("vendorB calls = %d, want 1", upB.calls)
+	}
+	if upA.calls != 0 {
+		t.Errorf("vendorA calls = %d, want 0 (pinned away)", upA.calls)
+	}
+}
+
+func TestProviderPinUnknown(t *testing.T) {
+	up := &mockUpstream{}
+	mock := httptest.NewServer(up.handler())
+	defer mock.Close()
+	yaml := singleVendorYAML(mock.URL, "vendorA", "credA", "k")
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	// A pin that matches no serving provider is a 502, and never hits upstream.
+	resp := env.postPinned(t, "/v1/chat/completions", key, "nonexistent", `{"model":"gpt-4o","messages":[]}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", resp.StatusCode)
+	}
+	if up.calls != 0 {
+		t.Errorf("upstream calls = %d, want 0 (unknown pin)", up.calls)
 	}
 }
 
