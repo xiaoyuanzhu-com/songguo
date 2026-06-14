@@ -10,6 +10,7 @@ import { Page } from '../components/Layout';
 import { Playground } from '../components/Playground';
 import { Skeleton } from '../components/Skeleton';
 import { useFetch } from '../lib/useFetch';
+import { wireTests } from '../lib/playground';
 import { contextLabel, indexCatalog, MODALITY_LABEL, type CatalogInfo } from '../lib/catalogIndex';
 import { ModelIcon, modelMeta } from '../lib/modelBrand';
 import { int, ms, percent } from '../lib/format';
@@ -24,7 +25,8 @@ export function ServiceDetailPage() {
   const service = data?.find((s) => s.model === model);
   const info = indexCatalog(catalog).get(model);
   const meta = modelMeta(model);
-  const wires = wiresFor(service, providers);
+  const serving = servingProviders(service, providers);
+  const wires = wiresOf(serving);
 
   return (
     <Page
@@ -57,8 +59,8 @@ export function ServiceDetailPage() {
       ) : (
         <div className={styles.stack}>
           <Hero model={model} info={info} />
-          <TestSection model={model} kind={info?.kind ?? 'chat'} wires={wires} />
-          <QuickStart model={model} kind={info?.kind ?? 'chat'} />
+          <TestSection model={model} wires={wires} providers={serving} />
+          <QuickStart model={model} wires={wires} />
           <Usage
             requests={service.stats.requests}
             errors={service.stats.errors}
@@ -70,25 +72,35 @@ export function ServiceDetailPage() {
   );
 }
 
-/**
- * Union of wires enabled on the providers serving this model, so the
- * playground picks a request shape the route can actually serve. Providers
- * are matched by ID (a service provider's ID is the provider's credential ID,
- * which equals the provider ID).
- */
-function wiresFor(service: Service | undefined, providers: Provider[] | null): string[] {
+/** The providers (full objects) that serve this model, matched by id. */
+function servingProviders(service: Service | undefined, providers: Provider[] | null): Provider[] {
   if (!service || !providers) return [];
   const ids = new Set(service.providers.map((p) => p.id));
+  return providers.filter((p) => ids.has(p.id));
+}
+
+/**
+ * Union of wires enabled on the providers serving this model, so the
+ * playground picks a request shape the route can actually serve.
+ */
+function wiresOf(providers: Provider[]): string[] {
   const wires = new Set<string>();
   for (const p of providers) {
-    if (!ids.has(p.id)) continue;
     for (const ep of p.endpoints) wires.add(ep.wire);
   }
   return [...wires];
 }
 
 /** The playground card, scrolled into view when the URL is /services/:model#test. */
-function TestSection({ model, kind, wires }: { model: string; kind: string; wires: string[] }) {
+function TestSection({
+  model,
+  wires,
+  providers,
+}: {
+  model: string;
+  wires: string[];
+  providers: Provider[];
+}) {
   const { hash } = useLocation();
   const ref = useRef<HTMLDivElement>(null);
 
@@ -98,7 +110,7 @@ function TestSection({ model, kind, wires }: { model: string; kind: string; wire
 
   return (
     <div id="test" ref={ref}>
-      <Playground model={model} kind={kind} wires={wires} />
+      <Playground model={model} wires={wires} providers={providers} />
     </div>
   );
 }
@@ -144,24 +156,10 @@ function Hero({ model, info }: { model: string; info?: CatalogInfo }) {
   );
 }
 
-function QuickStart({ model, kind }: { model: string; kind: string }) {
+function QuickStart({ model, wires }: { model: string; wires: string[] }) {
   const origin = window.location.origin;
-  const snippet =
-    kind === 'embedding'
-      ? `curl ${origin}/v1/embeddings \\
-  -H "Authorization: Bearer $SONGGUO_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "${model}",
-    "input": "The quick brown fox"
-  }'`
-      : `curl ${origin}/v1/chat/completions \\
-  -H "Authorization: Bearer $SONGGUO_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "${model}",
-    "messages": [{ "role": "user", "content": "Hello!" }]
-  }'`;
+  const kind = wireTests(wires)[0]?.kind ?? 'unsupported';
+  const snippet = quickStartSnippet(origin, model, kind);
 
   return (
     <div className={`card ${styles.section}`}>
@@ -176,6 +174,49 @@ function QuickStart({ model, kind }: { model: string; kind: string }) {
       <pre className={styles.snippet}>{snippet}</pre>
     </div>
   );
+}
+
+/** A representative curl for the service's primary wire kind. */
+function quickStartSnippet(origin: string, model: string, kind: string): string {
+  switch (kind) {
+    case 'embedding':
+      return `curl ${origin}/v1/embeddings \\
+  -H "Authorization: Bearer $SONGGUO_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "${model}",
+    "input": "The quick brown fox"
+  }'`;
+    case 'asr':
+      return `# 1. Submit a recording (audio fetched by URL)
+curl ${origin}/x/<provider>/api/v3/auc/bigmodel/submit \\
+  -H "Authorization: Bearer $SONGGUO_TOKEN" \\
+  -H "X-Api-Resource-Id: volc.seedasr.auc" \\
+  -H "X-Api-Request-Id: $REQUEST_ID" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "user": {"uid":"me"}, "audio": {"url":"https://…/audio.wav","format":"wav"},
+        "request": {"model_name":"bigmodel"} }'
+
+# 2. Poll for the transcript with the same X-Api-Request-Id
+curl ${origin}/x/<provider>/api/v3/auc/bigmodel/query \\
+  -H "Authorization: Bearer $SONGGUO_TOKEN" \\
+  -H "X-Api-Resource-Id: volc.seedasr.auc" \\
+  -H "X-Api-Request-Id: $REQUEST_ID" -d '{}'`;
+    case 'chat':
+      return `curl ${origin}/v1/chat/completions \\
+  -H "Authorization: Bearer $SONGGUO_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "${model}",
+    "messages": [{ "role": "user", "content": "Hello!" }]
+  }'`;
+    default:
+      return `# ${model} is served over a passthrough wire — call the vendor path directly:
+curl ${origin}/x/<provider>/<vendor-path> \\
+  -H "Authorization: Bearer $SONGGUO_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{ "model": "${model}" }'`;
+  }
 }
 
 function Usage({

@@ -25,6 +25,46 @@ func init() {
 		Extract:  zeroCostExtract,
 		ZeroCost: true,
 	})
+	// Bigmodel file recognition (录音文件识别, e.g. doubao-seed-asr): an async
+	// submit→poll pair. submit returns only an ack; the transcript and billed
+	// audio duration arrive on a later query poll, so one wire covers both
+	// suffixes and meters whichever body carries audio_info.duration. Billing
+	// lands on the query call (per_second on the audio length); the submit call
+	// meters zero.
+	register(Wire{
+		Name:     "volc/asr",
+		Suffixes: []string{"/auc/bigmodel/submit", "/auc/bigmodel/query"},
+		Modality: calls.ModalitySTT,
+		Extract:  volcASRExtract,
+	})
+}
+
+// volcASRExtract meters a Volcengine bigmodel file-ASR response by the
+// recognized audio length: audio_info.duration is milliseconds, mapped to
+// Seconds for per_second pricing. The submit ack carries no audio_info, so it
+// extracts as unknown (metered zero) — only the query poll bills.
+func volcASRExtract(body []byte, _ Quirks) Extraction {
+	if len(body) == 0 {
+		return Extraction{Confidence: calls.ConfidenceUnknown}
+	}
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		return Extraction{Confidence: calls.ConfidenceUnknown}
+	}
+	// Duration sits at audio_info.duration; some payloads nest the whole result
+	// (audio_info included) under a "result" object, so try both.
+	durMs := numAt(m, "audio_info", "duration")
+	if durMs == 0 {
+		durMs = numAt(m, "result", "audio_info", "duration")
+	}
+	if durMs == 0 {
+		return Extraction{Confidence: calls.ConfidenceUnknown}
+	}
+	return Extraction{
+		Raw:        map[string]any{"duration_ms": durMs},
+		Norm:       Normalized{Seconds: durMs / 1000},
+		Confidence: calls.ConfidenceMeasured,
+	}
 }
 
 // volcTTSExtract meters a Volcengine speech-synthesis response. Billing is by

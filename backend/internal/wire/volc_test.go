@@ -52,3 +52,43 @@ func TestVolcTTSScanner(t *testing.T) {
 		t.Errorf("Chars = %v, want 42", got.Norm.Chars)
 	}
 }
+
+func TestVolcASRResolve(t *testing.T) {
+	enabled := []string{"volc/asr"}
+	for _, path := range []string{
+		"/api/v3/auc/bigmodel/submit",
+		"/api/v3/auc/bigmodel/query",
+	} {
+		w, ok := Resolve(enabled, "POST", path)
+		if !ok || w.Name != "volc/asr" {
+			t.Fatalf("Resolve(%q) = %q, %v; want volc/asr, true", path, w.Name, ok)
+		}
+		if w.Modality != "stt" {
+			t.Errorf("Resolve(%q) modality = %q, want stt", path, w.Modality)
+		}
+	}
+}
+
+func TestVolcASRExtract(t *testing.T) {
+	// Query poll: audio_info.duration (ms) → Seconds for per_second pricing.
+	body := []byte(`{"audio_info":{"duration":12500},"result":{"text":"你好世界"}}`)
+	got := volcASRExtract(body, nil)
+	if got.Norm.Seconds != 12.5 {
+		t.Errorf("Seconds = %v, want 12.5", got.Norm.Seconds)
+	}
+	if got.Confidence != "measured" {
+		t.Errorf("Confidence = %q, want measured", got.Confidence)
+	}
+
+	// Nested shape: audio_info under result.
+	nested := []byte(`{"result":{"text":"hi","audio_info":{"duration":3000}}}`)
+	if got := volcASRExtract(nested, nil); got.Norm.Seconds != 3 {
+		t.Errorf("nested Seconds = %v, want 3", got.Norm.Seconds)
+	}
+
+	// Submit ack (no audio_info yet): unknown, metered zero.
+	ack := []byte(`{"task_id":"abc","message":"accepted"}`)
+	if got := volcASRExtract(ack, nil); got.Confidence != "unknown" || got.Norm.Seconds != 0 {
+		t.Errorf("ack = %+v, want unknown/0 seconds", got)
+	}
+}

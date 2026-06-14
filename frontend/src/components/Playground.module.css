@@ -131,3 +131,103 @@
   line-height: 1.55;
   white-space: pre;
 }
+
+/* Wire picker: a segmented tab row when a service has several testable wires. */
+.wirePicker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+}
+
+.wireTab {
+  padding: 5px 12px;
+  border: none;
+  background: none;
+  border-radius: calc(var(--radius-control) - 2px);
+  font-size: 12.5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.wireTab:hover {
+  color: var(--text);
+}
+
+.wireTabActive,
+.wireTabActive:hover {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.06));
+}
+
+/* ASR parameter row. */
+.fieldGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 130px;
+  min-width: 0;
+}
+
+.fieldLabel {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.urlInput {
+  width: 100%;
+}
+
+/* ASR per-utterance breakdown. */
+.utterances {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.utterance {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.utteranceMeta {
+  flex: none;
+  min-width: 64px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Fallback panel for wires with no interactive test. */
+.unsupported {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.snippetBlock {
+  margin-top: 4px;
+}
+
+.snippetHead {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}

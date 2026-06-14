@@ -13,6 +13,7 @@ const WIRE_NAMES: Record<string, string> = {
   'anthropic/models': 'Models',
   'volc/tts': 'TTS',
   'volc/voice-clone': 'Voice cloning',
+  'volc/asr': 'ASR (file)',
 };
 
 export function wireName(wire: string): string {
@@ -31,6 +32,7 @@ const WIRE_KIND: Record<string, string> = {
   'anthropic/models': '',
   'volc/tts': 'tts',
   'volc/voice-clone': 'tts',
+  'volc/asr': 'stt',
 };
 
 export function wireKind(wire: string): string {
