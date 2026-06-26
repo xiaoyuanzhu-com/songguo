@@ -80,10 +80,10 @@ export function Playground({ model, wires, providers }: PlaygroundProps) {
   const [active, setActive] = useState(0);
   const test = tests[Math.min(active, tests.length - 1)];
 
-  // Provider id that fills the snippet placeholders: the pinned provider, or —
-  // for wires that can't be model-routed (ASR file/stream, TTS) — the first
-  // servable provider that serves this wire, so <provider-id> is never left raw.
-  // Model-routed wires under Auto stay unpinned (the gateway picks).
+  // Provider id for the snippets. The gateway routes every HTTP wire by endpoint
+  // under Auto, so a snippet pins only when the user pinned a provider — except
+  // WebSocket wires, which can't be Auto-routed and always need a concrete
+  // provider (the pinned one, else the first servable serving the wire).
   const snippetProvider =
     provider ?? servable.find((p) => p.endpoints.some((e) => e.wire === test?.wire));
   const snippetProviderId =
@@ -150,7 +150,7 @@ export function Playground({ model, wires, providers }: PlaygroundProps) {
         </Select>
       </div>
 
-      <Panel test={test} model={model} apiKey={apiKey} provider={provider} providers={servable} />
+      <Panel test={test} model={model} apiKey={apiKey} provider={provider} />
 
       <div className={styles.codeIntro}>
         <span className={styles.codeIntroTitle}>Call it from your code</span>
@@ -198,35 +198,28 @@ function CodeTabs({ tabs }: { tabs: CodeTab[] }) {
 
 /**
  * Dispatch to the panel for the active wire's kind. provider is the pinned
- * provider, or undefined under Auto routing (the gateway picks). Passthrough
- * wires (ASR, TTS) need a concrete provider, so under Auto they fall back to the
- * first servable provider that exposes the wire.
+ * provider, or undefined under Auto routing — where the gateway routes by
+ * endpoint, so ASR/TTS send no provider pin (empty id) just like chat.
  */
 function Panel({
   test,
   model,
   apiKey,
   provider,
-  providers,
 }: {
   test: WireTest;
   model: string;
   apiKey: string;
   provider?: Provider;
-  providers: Provider[];
 }) {
   switch (test.kind) {
     case 'chat':
     case 'embedding':
       return <PromptPanel test={test} model={model} apiKey={apiKey} providerId={provider?.id} />;
-    case 'asr': {
-      const p = provider ?? providers.find((pp) => pp.endpoints.some((e) => e.wire === test.wire));
-      return <AsrPanel apiKey={apiKey} providerId={p?.id ?? ''} />;
-    }
-    case 'tts': {
-      const p = provider ?? providers.find((pp) => pp.endpoints.some((e) => e.wire === test.wire));
-      return <TtsPanel apiKey={apiKey} providerId={p?.id ?? ''} model={model} />;
-    }
+    case 'asr':
+      return <AsrPanel apiKey={apiKey} providerId={provider?.id ?? ''} />;
+    case 'tts':
+      return <TtsPanel apiKey={apiKey} providerId={provider?.id ?? ''} model={model} />;
     default:
       return <UnsupportedPanel test={test} />;
   }

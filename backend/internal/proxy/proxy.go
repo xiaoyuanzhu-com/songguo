@@ -365,22 +365,35 @@ func (h *handler) denyUnmatched(w http.ResponseWriter, r *http.Request, userID, 
 // returning ok=false when it has already responded.
 func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.User, body []byte) (route, bool) {
 	res := meter.Classify(r.Method, r.URL.Path, body)
-	if res.Model == "" {
-		// ByteDance openspeech APIs name the billed model in a header rather
-		// than the body; using it lets PriceFor match the price table.
-		res.Model = r.Header.Get("X-Api-Resource-Id")
+
+	// Two distinct identities, deliberately kept apart:
+	//   routingModel — the body's model, the ONLY thing we route on. Empty for
+	//     model-less wires (TTS/ASR), which route by endpoint alone.
+	//   billingModel — what we meter/price as. Falls back to X-Api-Resource-Id
+	//     (ByteDance openspeech names the billed class in a header) so PriceFor
+	//     can match the table.
+	// The resource id must never reach routing: it is a billing class, not a
+	// model id, so routing on it would look up byModel[<billing class>], which
+	// can never match — the bug this split fixes. Routing is endpoint-first;
+	// the model only refines among providers that share an endpoint.
+	routingModel := res.Model
+	billingModel := res.Model
+	if billingModel == "" {
+		billingModel = r.Header.Get("X-Api-Resource-Id")
 	}
 
 	// Scope (model-bearing case): reject early if the requested model is not in
 	// a scoped user's allowlist, before any routing work.
-	if res.Model != "" && len(user.Scope) > 0 && !contains(user.Scope, res.Model) {
+	if routingModel != "" && len(user.Scope) > 0 && !contains(user.Scope, routingModel) {
 		writeError(w, http.StatusForbidden, "model_not_allowed", "model not allowed for this user")
 		return route{}, false
 	}
 
-	// Select the candidate set. A provider pin wins; else the body's model
-	// routes across every vendor serving it; else the default is every vendor
-	// (wire matching below narrows to those serving the path, priority-ordered).
+	// Select the candidate set, endpoint-first. A provider pin wins; else a body
+	// model narrows across the vendors serving it; else the default is every
+	// vendor, and resolveWires (below) narrows to those serving the requested
+	// path — i.e. the endpoint. A single provider on an endpoint is selected
+	// without the model ever being consulted.
 	pin := r.Header.Get("X-Songguo-Provider")
 	var (
 		targets []router.Target
@@ -389,8 +402,8 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 	switch {
 	case pin != "":
 		targets, err = h.router.CandidatesForProvider(pin)
-	case res.Model != "":
-		targets, err = h.router.Candidates(res.Model)
+	case routingModel != "":
+		targets, err = h.router.Candidates(routingModel)
 	default:
 		targets, err = h.router.AllCandidates()
 	}
@@ -406,13 +419,13 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 
 	kept, wires, denied := resolveWires(targets, r.Method, r.URL.Path)
 	if len(kept) == 0 {
-		h.denyUnmatched(w, r, user.ID, res.Model, r.URL.Path, denied)
+		h.denyUnmatched(w, r, user.ID, billingModel, r.URL.Path, denied)
 		return route{}, false
 	}
 
 	// Scope (model-less case): a scoped user is restricted to its allowed
 	// providers/vendors when there is no model to check.
-	if res.Model == "" && len(user.Scope) > 0 {
+	if routingModel == "" && len(user.Scope) > 0 {
 		kept = filterScopedVendors(kept, user.Scope)
 		if len(kept) == 0 {
 			writeError(w, http.StatusForbidden, "vendor_not_allowed", "vendor not allowed for this user")
@@ -420,7 +433,7 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 		}
 	}
 
-	model := res.Model
+	model := billingModel
 	return route{
 		model:    model,
 		modality: res.Modality,

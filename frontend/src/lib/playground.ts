@@ -164,27 +164,27 @@ function ttsSnippet({ model, origin, token, providerId }: SnippetOpts): string {
 }
 
 function asrFileSnippet({ origin, token, providerId }: SnippetOpts): string {
-  const pin = providerId || '<provider-id>';
-  const auth = bearer(token);
   // REQUEST_ID is generated once and reused across submit→poll, so the block
-  // runs as-is; only the audio URL is genuine user input.
+  // runs as-is; only the audio URL is genuine user input. Under Auto the gateway
+  // routes by endpoint, so no provider header — pin one only to keep submit and
+  // poll on the same provider when several serve this endpoint.
+  const shared = [
+    bearer(token),
+    ...providerLines(providerId, false),
+    `-H "X-Api-Resource-Id: volc.seedasr.auc"`,
+    `-H "X-Api-Request-Id: $REQUEST_ID"`,
+  ];
+  const submit = [...shared, `-H "Content-Type: application/json"`];
   return `# 1. Submit a recording (audio fetched by URL).
 REQUEST_ID=$(uuidgen)
 curl ${origin}/api/v3/auc/bigmodel/submit \\
-  ${auth} \\
-  -H "X-Songguo-Provider: ${pin}" \\
-  -H "X-Api-Resource-Id: volc.seedasr.auc" \\
-  -H "X-Api-Request-Id: $REQUEST_ID" \\
-  -H "Content-Type: application/json" \\
+  ${submit.join(' \\\n  ')} \\
   -d '{ "user": {"uid":"me"}, "audio": {"url":"https://example.com/audio.wav","format":"wav"},
         "request": {"model_name":"bigmodel"} }'
 
-# 2. Poll for the transcript with the same provider pin and X-Api-Request-Id.
+# 2. Poll for the transcript with the same X-Api-Request-Id.
 curl ${origin}/api/v3/auc/bigmodel/query \\
-  ${auth} \\
-  -H "X-Songguo-Provider: ${pin}" \\
-  -H "X-Api-Resource-Id: volc.seedasr.auc" \\
-  -H "X-Api-Request-Id: $REQUEST_ID" -d '{}'`;
+  ${shared.join(' \\\n  ')} -d '{}'`;
 }
 
 function wsSnippet(wire: string, path: string, { model, origin, token, providerId }: SnippetOpts): string {
@@ -217,19 +217,14 @@ function resourceIdFor(wire: string, model: string): string {
   return '';
 }
 
-// Wires that route by model id alone; everything else (Volcengine speech) is a
-// model-less passthrough that needs an explicit provider pin.
-const MODEL_ROUTED_WIRES = new Set([
-  'openai/chat',
-  'openai/completions',
-  'openai/responses',
-  'openai/embeddings',
-  'anthropic/messages',
-]);
-
-/** Whether a wire needs an explicit X-Songguo-Provider pin (vs. model routing). */
+/**
+ * Whether a wire still needs an explicit X-Songguo-Provider pin. The gateway
+ * routes every HTTP wire by endpoint under Auto — model-routed and model-less
+ * (ASR file, TTS) alike — so those never need a pin. Only WebSocket wires,
+ * which can't be Auto-routed, still require one.
+ */
 export function wireNeedsProviderPin(wire: string): boolean {
-  return !MODEL_ROUTED_WIRES.has(wire);
+  return (TEST_ENDPOINT[wire] ?? '').startsWith('WS ');
 }
 
 // --- Code-sample tabs (curl / Claude Code / Python) ------------------------
@@ -375,7 +370,13 @@ print(resp.text)`;
 }
 
 function pyAsrFileSnippet({ origin, token, providerId }: SnippetOpts): string {
-  const pin = providerId || '<provider-id>';
+  const headerLines = [
+    `    "Authorization": "Bearer ${pyToken(token)}",`,
+    ...(providerId ? [`    "X-Songguo-Provider": "${providerId}",`] : []),
+    `    "X-Api-Resource-Id": "volc.seedasr.auc",`,
+    `    "X-Api-Request-Id": request_id,`,
+    `    "Content-Type": "application/json",`,
+  ];
   return `import time
 import uuid
 import requests
@@ -383,11 +384,7 @@ import requests
 base = "${origin}/api/v3/auc/bigmodel"
 request_id = str(uuid.uuid4())
 headers = {
-    "Authorization": "Bearer ${pyToken(token)}",
-    "X-Songguo-Provider": "${pin}",
-    "X-Api-Resource-Id": "volc.seedasr.auc",
-    "X-Api-Request-Id": request_id,
-    "Content-Type": "application/json",
+${headerLines.join('\n')}
 }
 
 # 1. Submit a recording (audio fetched by URL).
@@ -562,7 +559,7 @@ export async function runTest(
 export interface AsrParams {
   /** Consumer user key (gateway auth). */
   key: string;
-  /** Provider id, pinned via X-Songguo-Provider (model-less, so no model to route on). */
+  /** Provider to pin via X-Songguo-Provider; empty routes by endpoint (Auto). */
   providerId: string;
   /** Billing class header, e.g. "volc.seedasr.auc". */
   resourceId: string;
@@ -609,10 +606,11 @@ export async function runAsr(p: AsrParams): Promise<AsrResult> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${p.key}`,
-    'X-Songguo-Provider': p.providerId,
     'X-Api-Resource-Id': p.resourceId,
     'X-Api-Request-Id': requestId,
   };
+  // Under Auto (no pin) the gateway routes by endpoint; only pin when chosen.
+  if (p.providerId) headers['X-Songguo-Provider'] = p.providerId;
 
   // 1. Submit the recognition task.
   let submit: Response;
@@ -735,7 +733,7 @@ export async function runAsr(p: AsrParams): Promise<AsrResult> {
 export interface TtsParams {
   /** Consumer user key (gateway auth). */
   key: string;
-  /** Provider id, pinned via X-Songguo-Provider (model-less, so no model to route on). */
+  /** Provider to pin via X-Songguo-Provider; empty routes by endpoint (Auto). */
   providerId: string;
   /** Model/billing class header, e.g. "seed-tts-2.0". */
   resourceId: string;
@@ -786,12 +784,13 @@ export async function runTts(p: TtsParams): Promise<TtsResult> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${p.key}`,
-    'X-Songguo-Provider': p.providerId,
     'X-Api-Resource-Id': p.resourceId,
     'X-Api-Request-Id': uuid(),
     // Tell Volcengine to report usage so the call meters by character.
     'X-Control-Require-Usage-Tokens-Return': 'true',
   };
+  // Under Auto (no pin) the gateway routes by endpoint; only pin when chosen.
+  if (p.providerId) headers['X-Songguo-Provider'] = p.providerId;
 
   let res: Response;
   try {

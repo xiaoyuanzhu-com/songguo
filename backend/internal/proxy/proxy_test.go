@@ -1061,6 +1061,51 @@ vendors:
 	}
 }
 
+// --- Test 13c: a model-less POST carrying only X-Api-Resource-Id routes by
+// endpoint, not by the resource id as if it were a model. Regression: the
+// resource id (a billing class, e.g. volc.seedasr.auc) used to be assigned to
+// res.Model and fed to Candidates(), which looked up byModel[<billing class>],
+// found nothing, and returned 502 no_upstream. Routing is endpoint-first; the
+// resource id is metering-only. ---
+
+func TestNativeResourceIdRoutesByEndpoint(t *testing.T) {
+	rec := &pathRecorder{}
+	mock := httptest.NewServer(rec.handler())
+	defer mock.Close()
+
+	yaml := nativeYAML(mock.URL, "bailian")
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	// An ASR-style submit: no body model, a billing class in X-Api-Resource-Id.
+	// volc.seedasr.auc is not a served model, so it must NOT be routed on — the
+	// single provider serving the path is selected by endpoint.
+	req, err := http.NewRequest(http.MethodPost, env.server.URL+"/api/v3/auc/bigmodel/submit",
+		strings.NewReader(`{"user":{"uid":"me"},"request":{"model_name":"bigmodel"}}`))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Api-Resource-Id", "volc.seedasr.auc")
+	resp, err := env.client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (resource id must not be routed as a model)", resp.StatusCode)
+	}
+
+	rec.mu.Lock()
+	gotPaths := append([]string(nil), rec.paths...)
+	rec.mu.Unlock()
+	if len(gotPaths) != 1 || gotPaths[0] != "/api/v3/auc/bigmodel/submit" {
+		t.Fatalf("upstream paths = %v, want [/api/v3/auc/bigmodel/submit]", gotPaths)
+	}
+}
+
 // --- Test 14: an unknown provider pin -> 502 no_upstream, nothing forwarded ---
 
 func TestNativeUnknownProviderPin(t *testing.T) {
