@@ -216,9 +216,13 @@ export function Playground({ services, providers, catalog, defaultModel }: Playg
   const pickRouting = (pid: string) => setSel({ ...routingResolve(pid), providerId: pid });
 
   // --- per-item "Changes …" notes: what a pick would force on the OTHER axes -
-  const note = (parts: string[]) => (parts.length ? `Changes ${parts.join(', ')}` : undefined);
-  // Picking a wire keeps Endpoint+Wire (that's the pick) but may switch the model.
-  const wireNote = (w: string) => note(info?.wires.includes(w) ? [] : ['Model']);
+  const note = (parts: string[]) => (parts.length ? `Changes ${parts.join(' + ')}` : undefined);
+  // Endpoint and Wire are one 1:1 axis, so picking either swaps its sibling, and
+  // may also switch the model when the current one doesn't serve the wire.
+  const endpointNote = (w: string) =>
+    w === wire ? undefined : note(['Wire', ...(info?.wires.includes(w) ? [] : ['Model'])]);
+  const wireNote = (w: string) =>
+    w === wire ? undefined : note(['Endpoint', ...(info?.wires.includes(w) ? [] : ['Model'])]);
   // Picking a model keeps it but may switch the endpoint+wire serving it.
   const modelNote = (m: string) => note(infos.get(m)?.wires.includes(wire) ? [] : ['Endpoint + Wire']);
   // Picking a provider may force a different model and/or endpoint+wire.
@@ -244,7 +248,7 @@ export function Playground({ services, providers, catalog, defaultModel }: Playg
           </SelectTrigger>
           <SelectContent>
             {allTests.map((t) => (
-              <SelectItem key={t.wire} value={t.wire} note={wireNote(t.wire)}>
+              <SelectItem key={t.wire} value={t.wire} note={endpointNote(t.wire)}>
                 {endpointPath(t)}
               </SelectItem>
             ))}
