@@ -152,13 +152,6 @@
   flex: 1 1 auto;
 }
 
-/* Read-only value shown in a selector row (e.g. the wire a path resolves to). */
-.selectorValue {
-  flex: 1 1 auto;
-  font-size: 13px;
-  color: var(--text);
-}
-
 /* ASR parameter row. */
 .fieldGrid {
   display: flex;

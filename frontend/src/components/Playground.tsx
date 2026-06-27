@@ -80,115 +80,155 @@ function wiresOf(providers: Provider[], serving: Set<string>): string[] {
   return [...wires];
 }
 
-/** The wires a single provider exposes that actually serve the model. */
-function providerWires(p: Provider, modelWires: string[]): string[] {
-  return p.endpoints.map((e) => e.wire).filter((w) => modelWires.includes(w));
-}
-
 /** The proxy path for an endpoint option, sans method ("POST /v1/x" → "/v1/x"). */
 function endpointPath(test: WireTest): string {
   return test.endpoint.replace(/^[A-Z]+\s+/, '') || test.wire;
 }
 
+/** A model's testable wires and the providers that serve each. */
+interface ModelInfo {
+  model: string;
+  /** Testable wires this model exposes, in ranked order. */
+  wires: string[];
+  /** Servable providers per wire (those whose endpoint exposes the wire). */
+  providersByWire: Map<string, Provider[]>;
+}
+
 /**
- * Interactive test card for any model the gateway serves. It is wire-first —
- * pick a model, the API (wire) it exposes, then routing (Auto or a pinned
- * provider) — and self-contained: a host page seeds the default model and the
- * card derives wires and routing from the services/providers/catalog it is
- * given, so the same impl backs every service page (and anywhere else a test
- * card belongs). All three selectors are always shown, even with a single
- * option, so the model, API, and routing in play are explicit. Requests go
- * through the real proxy with the signed-in key, so a test is routed and metered
- * like any SDK call and shows up in the call log.
+ * Interactive test card for any model the gateway serves. Self-contained: a host
+ * page seeds the default model and the card derives everything else from the
+ * services/providers/catalog it is given, so the same impl backs every service
+ * page (and anywhere else a test card belongs).
+ *
+ * Each of the four selectors — Endpoint, Wire, Model, Routing — lists the full
+ * universe for its axis in a stable static order, so nothing moves or hides as
+ * you choose. Endpoint and Wire are two views of one axis (1:1: the proxy path
+ * and the protocol it speaks). A pick may be incompatible with the others; rather
+ * than block it, the card cascades to the nearest valid state, and each item
+ * flags up-front which other axes it would change. Requests go through the real
+ * proxy with the signed-in key, so a test is routed and metered like any SDK call
+ * and shows up in the call log.
  */
 export function Playground({ services, providers, catalog, defaultModel }: PlaygroundProps) {
   // The signed-in admin key doubles as a consumer key (the backend seeds an
   // admin user with the same key), so tests reuse it instead of a separate key.
   const apiKey = getAdminKey();
 
-  // Models offered, by friendly name. The host seeds one (the service in view);
-  // the user can switch to exercise any other served model from the same card.
-  const models = useMemo(
-    () =>
-      services
-        .map((s) => s.model)
-        .sort((a, b) => modelMeta(a).name.localeCompare(modelMeta(b).name)),
-    [services],
-  );
-  const [model, setModel] = useState(defaultModel ?? models[0] ?? '');
-  // Keep the selection valid if the seed is absent or the model list shifts.
-  const selModel = models.includes(model) ? model : (models[0] ?? '');
+  // Per-model index: which testable wires it exposes and which providers serve
+  // each. Every list the card offers and the cascade between them derive from it.
+  const infos = useMemo(() => {
+    const map = new Map<string, ModelInfo>();
+    for (const s of services) {
+      const serving = servingProviders(s, providers);
+      const wires = wireTests(wiresOf(serving, wiresForModel(catalog, s.model))).map((t) => t.wire);
+      const providersByWire = new Map<string, Provider[]>();
+      for (const w of wires) {
+        providersByWire.set(
+          w,
+          serving.filter((p) => p.endpoints.some((e) => e.wire === w)),
+        );
+      }
+      map.set(s.model, { model: s.model, wires, providersByWire });
+    }
+    return map;
+  }, [services, providers, catalog]);
 
-  // Routing: AUTO = let the gateway pick a provider; otherwise pin to a provider
-  // id. Auto is the default and lets a test exercise the real routing. (Radix
-  // Select forbids an empty-string value, so Auto uses a sentinel that no
-  // provider id equals, which `find` resolves to undefined — i.e. no pin.)
-  const [providerId, setProviderId] = useState(AUTO);
-  const [active, setActive] = useState(0);
+  // The full universe of each axis, in a stable static order (independent of the
+  // current selection) so an item never moves or disappears between renders.
+  const allModels = useMemo(
+    () => [...infos.keys()].sort((a, b) => modelMeta(a).name.localeCompare(modelMeta(b).name)),
+    [infos],
+  );
+  const allTests = useMemo(() => {
+    const ids = new Set<string>();
+    for (const info of infos.values()) for (const w of info.wires) ids.add(w);
+    return wireTests([...ids].sort());
+  }, [infos]);
+  const allProviders = useMemo(() => {
+    const map = new Map<string, Provider>();
+    for (const info of infos.values())
+      for (const ps of info.providersByWire.values()) for (const p of ps) map.set(p.id, p);
+    return [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [infos]);
 
-  // Per selected model: the providers serving it and the wires it actually
-  // exposes (catalog-narrowed), from which routing and API options derive.
-  const serving = useMemo(
-    () => servingProviders(services.find((s) => s.model === selModel), providers),
-    [services, providers, selModel],
-  );
-  const wires = useMemo(
-    () => wiresOf(serving, wiresForModel(catalog, selModel)),
-    [serving, catalog, selModel],
-  );
+  // AUTO = let the gateway pick a provider; otherwise pin to a provider id. Each
+  // axis holds a free choice from its full universe, so a pick may be incompatible
+  // with the others — the pick* handlers below cascade to a valid state.
+  const [sel, setSel] = useState<{ model: string; wire: string; providerId: string }>(() => ({
+    model: defaultModel ?? '',
+    wire: '',
+    providerId: AUTO,
+  }));
 
-  // Only providers with at least one interactively-testable wire for this model.
-  const servable = useMemo(
-    () => serving.filter((p) => wireTests(providerWires(p, wires)).length > 0),
-    [serving, wires],
-  );
-  const provider = servable.find((p) => p.id === providerId);
-
-  // The APIs offered depend on routing: the full model union under Auto, or
-  // only the pinned provider's wires.
-  const tests = useMemo(
-    () => wireTests(provider ? providerWires(provider, wires) : wires),
-    [provider, wires],
-  );
-  const test = tests[Math.min(active, tests.length - 1)];
+  // Normalize the raw selection against the current data so the display is always
+  // valid (the seed may arrive late, or the model list may shift under us).
+  const model = infos.has(sel.model)
+    ? sel.model
+    : defaultModel && infos.has(defaultModel)
+      ? defaultModel
+      : (allModels[0] ?? '');
+  const info = infos.get(model);
+  const wire = info && info.wires.includes(sel.wire) ? sel.wire : (info?.wires[0] ?? '');
+  const routable = info?.providersByWire.get(wire) ?? [];
+  const provider = routable.find((p) => p.id === sel.providerId);
+  const test = allTests.find((t) => t.wire === wire);
 
   // Provider id for the snippets. The gateway routes every HTTP wire by endpoint
   // under Auto, so a snippet pins only when the user pinned a provider — except
   // WebSocket wires, which can't be Auto-routed and always need a concrete
-  // provider (the pinned one, else the first servable serving the wire).
+  // provider (the pinned one, else the first serving the wire).
   const snippetProvider =
-    provider ?? servable.find((p) => p.endpoints.some((e) => e.wire === test?.wire));
+    provider ?? routable[0] ?? allProviders.find((p) => p.endpoints.some((e) => e.wire === wire));
   const snippetProviderId =
     test && wireNeedsProviderPin(test.wire) ? snippetProvider?.id : provider?.id;
 
-  // Switching model invalidates the pinned provider and selected wire; reset both.
-  const changeModel = (m: string) => {
-    setModel(m);
-    setProviderId(AUTO);
-    setActive(0);
+  // --- cascade: honor the picked axis, minimally adjust the rest -------------
+  const serves = (p: Provider, m: string, w: string) =>
+    (infos.get(m)?.providersByWire.get(w) ?? []).some((x) => x.id === p.id);
+  const servesAnyWire = (p: Provider, m: string) =>
+    [...(infos.get(m)?.providersByWire.values() ?? [])].some((ps) => ps.some((x) => x.id === p.id));
+  const keepProvider = (m: string, w: string) =>
+    (infos.get(m)?.providersByWire.get(w) ?? []).some((p) => p.id === sel.providerId)
+      ? sel.providerId
+      : AUTO;
+
+  const pickWire = (w: string) => {
+    const m = info?.wires.includes(w) ? model : (allModels.find((x) => infos.get(x)?.wires.includes(w)) ?? model);
+    setSel({ model: m, wire: w, providerId: keepProvider(m, w) });
+  };
+  const pickModel = (m: string) => {
+    const w = infos.get(m)?.wires.includes(wire) ? wire : (infos.get(m)?.wires[0] ?? '');
+    setSel({ model: m, wire: w, providerId: keepProvider(m, w) });
+  };
+  // Where selecting a routing provider lands: keep model/wire if it serves them,
+  // else fall to the first model (then wire) it does serve.
+  const routingResolve = (pid: string): { model: string; wire: string } => {
+    if (pid === AUTO) return { model, wire };
+    const p = allProviders.find((x) => x.id === pid);
+    if (!p) return { model, wire };
+    const m = servesAnyWire(p, model) ? model : (allModels.find((x) => servesAnyWire(p, x)) ?? model);
+    const w =
+      serves(p, m, wire) && m === model
+        ? wire
+        : (infos.get(m)?.wires.find((x) => serves(p, m, x)) ?? infos.get(m)?.wires[0] ?? '');
+    return { model: m, wire: w };
+  };
+  const pickRouting = (pid: string) => setSel({ ...routingResolve(pid), providerId: pid });
+
+  // --- per-item "Changes …" notes: what a pick would force on the OTHER axes -
+  const note = (parts: string[]) => (parts.length ? `Changes ${parts.join(', ')}` : undefined);
+  // Picking a wire keeps Endpoint+Wire (that's the pick) but may switch the model.
+  const wireNote = (w: string) => note(info?.wires.includes(w) ? [] : ['Model']);
+  // Picking a model keeps it but may switch the endpoint+wire serving it.
+  const modelNote = (m: string) => note(infos.get(m)?.wires.includes(wire) ? [] : ['Endpoint + Wire']);
+  // Picking a provider may force a different model and/or endpoint+wire.
+  const routingNote = (pid: string) => {
+    if (pid === AUTO) return undefined;
+    const r = routingResolve(pid);
+    return note([...(r.wire !== wire ? ['Endpoint + Wire'] : []), ...(r.model !== model ? ['Model'] : [])]);
   };
 
-  if (models.length === 0) return null;
-
-  // Shared across both states so the model stays switchable even when the
-  // selected model has no testable endpoint.
-  const modelRow = (
-    <div className={styles.selectorRow}>
-      <span className={styles.selectorLabel}>Model</span>
-      <Select value={selModel} onValueChange={changeModel}>
-        <SelectTrigger className={styles.selectorSelect} aria-label="Model to test">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {models.map((m) => (
-            <SelectItem key={m} value={m}>
-              {modelMeta(m).name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  );
+  if (allModels.length === 0) return null;
 
   return (
     <div className={`card ${styles.section}`}>
@@ -196,65 +236,78 @@ export function Playground({ services, providers, catalog, defaultModel }: Playg
         <h3 className={styles.title}>Test</h3>
       </div>
 
+      <div className={styles.selectorRow}>
+        <span className={styles.selectorLabel}>Endpoint</span>
+        <Select value={wire} onValueChange={pickWire}>
+          <SelectTrigger className={styles.selectorSelect} aria-label="Endpoint to test">
+            <SelectValue placeholder="Select an endpoint" />
+          </SelectTrigger>
+          <SelectContent>
+            {allTests.map((t) => (
+              <SelectItem key={t.wire} value={t.wire} note={wireNote(t.wire)}>
+                {endpointPath(t)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className={styles.selectorRow}>
+        <span className={styles.selectorLabel}>Wire</span>
+        <Select value={wire} onValueChange={pickWire}>
+          <SelectTrigger className={styles.selectorSelect} aria-label="Wire to test">
+            <SelectValue placeholder="Select a wire" />
+          </SelectTrigger>
+          <SelectContent>
+            {allTests.map((t) => (
+              <SelectItem key={t.wire} value={t.wire} note={wireNote(t.wire)}>
+                {wireFullName(t.wire)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className={styles.selectorRow}>
+        <span className={styles.selectorLabel}>Model</span>
+        <Select value={model} onValueChange={pickModel}>
+          <SelectTrigger className={styles.selectorSelect} aria-label="Model to test">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {allModels.map((m) => (
+              <SelectItem key={m} value={m} note={modelNote(m)}>
+                {modelMeta(m).name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className={styles.selectorRow}>
+        <span className={styles.selectorLabel}>Routing</span>
+        <Select value={provider ? provider.id : AUTO} onValueChange={pickRouting}>
+          <SelectTrigger className={styles.selectorSelect} aria-label="Routing">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={AUTO}>Auto</SelectItem>
+            {allProviders.map((p) => (
+              <SelectItem key={p.id} value={p.id} note={routingNote(p.id)}>
+                {p.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
       {!test ? (
-        <>
-          {modelRow}
-          <p className={styles.hint}>
-            No provider serving this model exposes a model-serving wire to test interactively.
-          </p>
-        </>
+        <p className={styles.hint}>
+          No provider serving this model exposes a model-serving wire to test interactively.
+        </p>
       ) : (
         <>
-          <div className={styles.selectorRow}>
-            <span className={styles.selectorLabel}>Endpoint</span>
-            <Select
-              value={test.wire}
-              onValueChange={(w) => setActive(tests.findIndex((t) => t.wire === w))}
-            >
-              <SelectTrigger className={styles.selectorSelect} aria-label="Endpoint to test">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {tests.map((t) => (
-                  <SelectItem key={t.wire} value={t.wire}>
-                    {endpointPath(t)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className={styles.selectorRow}>
-            <span className={styles.selectorLabel}>Wire</span>
-            <span className={styles.selectorValue}>{wireFullName(test.wire)}</span>
-          </div>
-
-          {modelRow}
-
-          <div className={styles.selectorRow}>
-            <span className={styles.selectorLabel}>Routing</span>
-            <Select
-              value={provider ? provider.id : AUTO}
-              onValueChange={(v) => {
-                setProviderId(v);
-                setActive(0);
-              }}
-            >
-              <SelectTrigger className={styles.selectorSelect} aria-label="Routing">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={AUTO}>Auto</SelectItem>
-                {servable.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <Panel test={test} model={selModel} apiKey={apiKey} provider={provider} />
+          <Panel test={test} model={model} apiKey={apiKey} provider={provider} />
 
           <div className={styles.codeIntro}>
             <span className={styles.codeIntroTitle}>Call it from your code</span>
@@ -263,9 +316,9 @@ export function Playground({ services, providers, catalog, defaultModel }: Playg
             </span>
           </div>
           <CodeTabs
-            key={`${selModel}:${test.wire}:${snippetProviderId ?? 'auto'}`}
+            key={`${model}:${test.wire}:${snippetProviderId ?? 'auto'}`}
             tabs={codeTabsFor(test.wire, {
-              model: selModel,
+              model,
               origin: window.location.origin,
               token: apiKey,
               providerId: snippetProviderId,
