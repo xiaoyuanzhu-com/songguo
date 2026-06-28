@@ -12,7 +12,6 @@ import { Skeleton } from '../components/Skeleton';
 import { useFetch } from '../lib/useFetch';
 import { contextLabel, indexCatalog, MODALITY_LABEL, type CatalogInfo } from '../lib/catalogIndex';
 import { ModelIcon, modelMeta } from '../lib/modelBrand';
-import { int, ms, percent } from '../lib/format';
 import styles from './ServiceDetail.module.css';
 
 export function ServiceDetailPage() {
@@ -61,11 +60,6 @@ export function ServiceDetailPage() {
             providers={providers ?? []}
             catalog={catalog}
             model={model}
-          />
-          <Usage
-            requests={service.stats.requests}
-            errors={service.stats.errors}
-            avgLatency={service.stats.avg_latency_ms}
           />
         </div>
       )}
@@ -134,42 +128,6 @@ function Hero({ model, info }: { model: string; info?: CatalogInfo }) {
               <span className={styles.factValue}>{value}</span>
             </div>
           ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Usage({
-  requests,
-  errors,
-  avgLatency,
-}: {
-  requests: number;
-  errors: number;
-  avgLatency: number;
-}) {
-  return (
-    <div className={`card ${styles.section}`}>
-      <div className={styles.sectionHead}>
-        <h3 className={styles.sectionTitle}>Usage</h3>
-      </div>
-      {requests === 0 ? (
-        <p className={styles.sectionHint}>No traffic yet — send a first request to see stats.</p>
-      ) : (
-        <div className={styles.usageRow}>
-          <div className={styles.fact}>
-            <span className={styles.factLabel}>Requests</span>
-            <span className={styles.factValue}>{int(requests)}</span>
-          </div>
-          <div className={styles.fact}>
-            <span className={styles.factLabel}>Error rate</span>
-            <span className={styles.factValue}>{percent(errors / requests)}</span>
-          </div>
-          <div className={styles.fact}>
-            <span className={styles.factLabel}>Avg latency</span>
-            <span className={styles.factValue}>{ms(avgLatency)}</span>
-          </div>
         </div>
       )}
     </div>
