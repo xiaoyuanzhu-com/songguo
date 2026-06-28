@@ -55,6 +55,12 @@ var wsHandshakeHeaders = map[string]struct{}{
 // tokens (the one handshake channel a browser controls). The value after each
 // prefix is base64url-encoded — base64url's alphabet is all valid subprotocol
 // token characters, so any key/id survives the round trip.
+//
+// This is NOT the standard use of Sec-WebSocket-Protocol (it's meant for
+// application subprotocol negotiation, not auth) — it's a deliberate workaround
+// for the browser's header-less WebSocket API. Same trick the Kubernetes API
+// server uses for exec/attach ("base64url.bearer.authorization.k8s.io.<token>").
+// We strip these tokens here so the upstream vendor never sees them.
 var wsAuthSubprotocols = []struct {
 	prefix string
 	header string

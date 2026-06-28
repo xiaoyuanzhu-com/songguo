@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Download, Send } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Download, Mic, Send, Upload } from 'lucide-react';
 import type { Catalog, Provider, Service } from '../api/types';
 import { getAdminKey } from '../api/client';
 import { modelMeta } from '../lib/modelBrand';
@@ -23,7 +23,13 @@ import {
   type VideoResult,
   type WireTest,
 } from '../lib/playground';
-import { runAsrStream, type AsrStreamResult } from '../lib/playgroundStreaming';
+import {
+  guessAudioMeta,
+  runAsrStreamFile,
+  startAsrMicStream,
+  type AsrMicController,
+  type AsrStreamResult,
+} from '../lib/playgroundStreaming';
 import { int, ms } from '../lib/format';
 import { CopyButton } from './CopyButton';
 import {
@@ -706,8 +712,6 @@ function AsrPanel({
   providerId: string;
 }) {
   const [audioUrl, setAudioUrl] = useState('');
-  const [format, setFormat] = useState('wav');
-  const [resourceId, setResourceId] = useState('volc.seedasr.auc');
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<AsrResult | null>(null);
   const [showRaw, setShowRaw] = useState(false);
@@ -718,12 +722,15 @@ function AsrPanel({
     if (!canSend) return;
     setRunning(true);
     setShowRaw(false);
+    // Container is inferred from the URL extension; the billing resource id is
+    // fixed (both are customizable in the code samples, not the test UI).
+    const ext = audioUrl.trim().split('.').pop()?.toLowerCase() ?? '';
     const res = await runAsr({
       key: apiKey.trim(),
       providerId,
-      resourceId: resourceId.trim() || 'volc.seedasr.auc',
+      resourceId: 'volc.seedasr.auc',
       audioUrl: audioUrl.trim(),
-      format,
+      format: ASR_FORMATS.includes(ext) ? ext : 'wav',
     });
     setResult(res);
     setRunning(false);
@@ -736,28 +743,6 @@ function AsrPanel({
         publicly fetchable URL — the API pulls it by URL, then this polls until the transcript is
         ready.
       </p>
-
-      <div className={styles.fieldGrid}>
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Format</span>
-          <select className="select" value={format} onChange={(e) => setFormat(e.target.value)}>
-            {ASR_FORMATS.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Resource id</span>
-          <input
-            className="input mono"
-            value={resourceId}
-            onChange={(e) => setResourceId(e.target.value)}
-            placeholder="volc.seedasr.auc"
-          />
-        </label>
-      </div>
 
       <input
         className={`input mono ${styles.urlInput}`}
@@ -835,8 +820,6 @@ function Utterances({ utterances }: { utterances: AsrResult['utterances'] }) {
 
 // --- Streaming ASR panel (Volcengine sauc bigmodel over WebSocket) ----------
 
-const ASR_RATES = [16000, 8000, 24000, 48000];
-
 function AsrStreamPanel({
   apiKey,
   providerId,
@@ -848,110 +831,105 @@ function AsrStreamPanel({
   /** Gateway WS path for this wire, e.g. "/api/v3/sauc/bigmodel_async". */
   path: string;
 }) {
-  const [audio, setAudio] = useState<Uint8Array | null>(null);
-  const [fileName, setFileName] = useState('');
-  const [format, setFormat] = useState('wav');
-  const [rate, setRate] = useState(16000);
-  const [modelName, setModelName] = useState('bigmodel');
-  const [resourceId, setResourceId] = useState('volc.seedasr.sauc.duration');
-  const [running, setRunning] = useState(false);
+  const [running, setRunning] = useState(false); // a file transcription is in flight
+  const [recording, setRecording] = useState(false);
   const [partial, setPartial] = useState('');
   const [result, setResult] = useState<AsrStreamResult | null>(null);
   const [showRaw, setShowRaw] = useState(false);
+  const micRef = useRef<AsrMicController | null>(null);
 
-  const onPick = async (file: File | undefined) => {
-    if (!file) return;
-    const buf = await file.arrayBuffer();
-    setAudio(new Uint8Array(buf));
-    setFileName(file.name);
-    const ext = file.name.split('.').pop()?.toLowerCase();
-    if (ext && ASR_FORMATS.includes(ext)) setFormat(ext);
-  };
+  // Stop the mic if the panel unmounts mid-recording.
+  useEffect(() => () => micRef.current?.stop(), []);
 
-  const canSend =
-    apiKey.trim() !== '' && providerId !== '' && audio !== null && !running;
+  const ready = apiKey.trim() !== '' && providerId !== '';
+  const busy = running || recording;
 
-  const send = async () => {
-    if (!canSend || !audio) return;
-    setRunning(true);
+  const reset = () => {
     setShowRaw(false);
     setPartial('');
     setResult(null);
-    const res = await runAsrStream({
+  };
+
+  const onFile = async (file: File | undefined) => {
+    if (!file || !ready || busy) return;
+    reset();
+    setRunning(true);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const { format, rate } = guessAudioMeta(bytes, file.name);
+    const res = await runAsrStreamFile({
       key: apiKey.trim(),
       providerId,
-      resourceId: resourceId.trim() || 'volc.seedasr.sauc.duration',
       path,
-      audio,
+      audio: bytes,
       format,
       rate,
-      modelName: modelName.trim() || 'bigmodel',
       onPartial: setPartial,
     });
     setResult(res);
     setRunning(false);
   };
 
+  const toggleMic = async () => {
+    if (recording) {
+      micRef.current?.stop();
+      return;
+    }
+    if (!ready || running) return;
+    reset();
+    try {
+      const ctrl = await startAsrMicStream({ key: apiKey.trim(), providerId, path, onPartial: setPartial });
+      micRef.current = ctrl;
+      setRecording(true);
+      const res = await ctrl.done;
+      setResult(res);
+    } catch (e) {
+      setResult({
+        ok: false,
+        text: '',
+        errorMessage: e instanceof Error ? e.message : 'Microphone unavailable',
+        raw: '',
+        latencyMs: 0,
+        bytesUp: 0,
+      });
+    } finally {
+      setRecording(false);
+      micRef.current = null;
+    }
+  };
+
   return (
     <>
       <p className={styles.hint}>
-        Transcribe a recording over the real streaming WebSocket — the audio is uploaded from your
-        browser and streamed in frames, with partial transcripts appearing live.
-        {providerId === '' && ' Select a routing provider above first — streaming can’t be Auto-routed.'}
+        Transcribe over the real streaming WebSocket — record from your mic for live transcription,
+        or upload a recording.
+        {!ready && ' Select a routing provider above first — streaming can’t be Auto-routed.'}
       </p>
 
-      <div className={styles.fieldGrid}>
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Format</span>
-          <select className="select" value={format} onChange={(e) => setFormat(e.target.value)}>
-            {ASR_FORMATS.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Sample rate</span>
-          <select className="select" value={rate} onChange={(e) => setRate(Number(e.target.value))}>
-            {ASR_RATES.map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Model name</span>
-          <input className="input mono" value={modelName} onChange={(e) => setModelName(e.target.value)} />
-        </label>
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Resource id</span>
+      <div className={styles.actions}>
+        <button
+          type="button"
+          className={`btn ${recording ? styles.recording : 'btn-primary'}`}
+          onClick={toggleMic}
+          disabled={!ready || running}
+        >
+          {recording ? <span className={styles.recDot} /> : <Mic size={14} />}
+          {recording ? 'Stop recording' : 'Record'}
+        </button>
+        <label className={`btn ${busy ? styles.btnDisabled : ''}`} style={{ cursor: busy ? 'default' : 'pointer' }}>
+          {running ? <span className="spinner" /> : <Upload size={14} />}
+          {running ? 'Transcribing…' : 'Upload audio'}
           <input
-            className="input mono"
-            value={resourceId}
-            onChange={(e) => setResourceId(e.target.value)}
-            placeholder="volc.seedasr.sauc.duration"
+            type="file"
+            accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac,.pcm"
+            hidden
+            disabled={busy}
+            onChange={(e) => {
+              void onFile(e.target.files?.[0]);
+              e.target.value = '';
+            }}
           />
         </label>
-      </div>
-
-      <label className={`btn ${styles.fileButton}`}>
-        {fileName || 'Choose audio file…'}
-        <input
-          type="file"
-          accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac,.pcm"
-          hidden
-          onChange={(e) => onPick(e.target.files?.[0])}
-        />
-      </label>
-
-      <div className={styles.actions}>
-        <button type="button" className="btn btn-primary" onClick={send} disabled={!canSend}>
-          {running ? <span className="spinner" /> : <Send size={14} />}
-          {running ? 'Transcribing…' : 'Transcribe'}
-        </button>
-        {result && !running && (
+        {result && !busy && (
           <span className={styles.meta}>
             <span className={`pill ${result.ok ? 'pill-ok' : 'pill-err'}`}>
               <span className="dot" />
@@ -963,13 +941,13 @@ function AsrStreamPanel({
         )}
       </div>
 
-      {(partial || result) && (
+      {(busy || partial || result) && (
         <div className={styles.result}>
           {result && !result.ok ? (
             <pre className={`${styles.resultText} ${styles.resultError}`}>{result.errorMessage}</pre>
           ) : (
             <pre className={styles.resultText}>
-              {(result?.text || partial) || '(listening…)'}
+              {result?.text || partial || (recording ? '(listening…)' : '(transcribing…)')}
             </pre>
           )}
           {result?.ok && <Utterances utterances={result.utterances} />}
@@ -982,7 +960,9 @@ function AsrStreamPanel({
 
 // --- TTS panel (Volcengine HTTP unidirectional synthesis) ------------------
 
-const TTS_FORMATS = ['mp3', 'wav', 'ogg_opus'];
+// Output container + billing resource id are fixed in the test UI (both are
+// shown, and customizable, in the code samples).
+const TTS_FORMAT = 'mp3';
 
 function TtsPanel({
   apiKey,
@@ -996,8 +976,6 @@ function TtsPanel({
 }) {
   const [text, setText] = useState('你好，欢迎使用松果语音合成。');
   const [voice, setVoice] = useState(DEFAULT_TTS_VOICE);
-  const [format, setFormat] = useState('mp3');
-  const [resourceId, setResourceId] = useState(model);
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<TtsResult | null>(null);
   const [showRaw, setShowRaw] = useState(false);
@@ -1019,10 +997,10 @@ function TtsPanel({
     const res = await runTts({
       key: apiKey.trim(),
       providerId,
-      resourceId: resourceId.trim() || model,
+      resourceId: model,
       text: text.trim(),
       voice: voice.trim(),
-      format,
+      format: TTS_FORMAT,
     });
     setResult(res);
     setRunning(false);
@@ -1043,25 +1021,6 @@ function TtsPanel({
             value={voice}
             onChange={(e) => setVoice(e.target.value)}
             placeholder="zh_female_vv_jupiter_bigtts"
-          />
-        </label>
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Format</span>
-          <select className="select" value={format} onChange={(e) => setFormat(e.target.value)}>
-            {TTS_FORMATS.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={styles.field}>
-          <span className={styles.fieldLabel}>Resource id</span>
-          <input
-            className="input mono"
-            value={resourceId}
-            onChange={(e) => setResourceId(e.target.value)}
-            placeholder={model}
           />
         </label>
       </div>

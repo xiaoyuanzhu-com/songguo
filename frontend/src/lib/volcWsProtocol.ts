@@ -178,6 +178,17 @@ export function isFinalFrame(frame: Frame): boolean {
 }
 
 // --- browser↔gateway auth shim --------------------------------------------
+//
+// NOTE: this is NOT the standard use of Sec-WebSocket-Protocol. That header is
+// meant for application subprotocol negotiation (the client lists protocols like
+// "graphql-ws"/"mqtt" and the server picks one), not for carrying credentials.
+// We abuse it because the browser WebSocket API gives JS no other way to attach a
+// credential to the handshake — it won't let us set Authorization. This is a
+// recognized workaround, not something we invented: the Kubernetes API server
+// does the same for exec/attach ("base64url.bearer.authorization.k8s.io.<token>").
+// The alternatives are worse here: a query param leaks the key into access logs,
+// and post-connect auth doesn't fit (the gateway needs the credential DURING the
+// handshake to dial Volcengine with the right headers).
 
 function base64url(s: string): string {
   return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -185,9 +196,10 @@ function base64url(s: string): string {
 
 /**
  * The Sec-WebSocket-Protocol values that smuggle the gateway credentials past
- * the browser's header-less WebSocket API. The gateway lifts them back into the
- * Authorization / X-Songguo-Provider / X-Api-Resource-Id headers and strips them
- * before the upstream handshake. resourceId is omitted when empty.
+ * the browser's header-less WebSocket API (see the note above on why this header).
+ * The gateway lifts them back into the Authorization / X-Songguo-Provider /
+ * X-Api-Resource-Id headers and strips them before the upstream handshake.
+ * resourceId is omitted when empty. base64url keeps any key value a valid token.
  */
 export function wsAuthProtocols(token: string, providerId: string, resourceId: string): string[] {
   const protocols = [`songguo.auth.${base64url(token)}`, `songguo.provider.${base64url(providerId)}`];
