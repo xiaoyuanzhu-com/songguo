@@ -14,13 +14,9 @@ func init() {
 		Extract:    anthropicExtract,
 		NewScanner: newAnthropicScanner,
 	})
-	register(Wire{
-		Name:     "anthropic/models",
-		Suffixes: []string{"/models"},
-		Modality: calls.ModalityUnknown,
-		Extract:  zeroCostExtract,
-		ZeroCost: true,
-	})
+	// No anthropic/models wire: model listing is served by openai/models only.
+	// (Both claimed the /models suffix, so a provider exposing both adapters on
+	// one origin routed /v1/models ambiguously.)
 }
 
 // anthropicExtract meters a non-streaming Messages body: top-level "usage"

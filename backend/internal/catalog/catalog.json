@@ -32,8 +32,7 @@
         "claude-haiku-4-5": { "input": 1.0, "output": 5.0, "cached_input": 0.1, "unit": "per_1m_tokens", "context": 200000, "modalities": ["text", "image"] }
       },
       "endpoints": [
-        { "wire": "anthropic/messages", "endpoint": "https://api.anthropic.com/v1/messages", "adapter": "anthropic-compatible", "docs": "https://docs.anthropic.com/en/api/messages", "note": "Authenticates with x-api-key + anthropic-version. Point the Anthropic SDK's base_url at http://<songguo>; it appends /v1/messages.", "models": ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"] },
-        { "wire": "anthropic/models", "endpoint": "https://api.anthropic.com/v1", "adapter": "anthropic-compatible" }
+        { "wire": "anthropic/messages", "endpoint": "https://api.anthropic.com/v1/messages", "adapter": "anthropic-compatible", "docs": "https://docs.anthropic.com/en/api/messages", "note": "Authenticates with x-api-key + anthropic-version. Point the Anthropic SDK's base_url at http://<songguo>; it appends /v1/messages.", "models": ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"] }
       ]
     },
     {
@@ -48,8 +47,7 @@
       "endpoints": [
         { "wire": "openai/chat", "endpoint": "https://api.deepseek.com/chat/completions", "adapter": "openai-compatible", "docs": "https://api-docs.deepseek.com", "note": "Context caching is automatic; cache hits are billed at the cached_input rate (reported via prompt_cache_hit_tokens).", "models": ["deepseek-v4-flash", "deepseek-v4-pro"] },
         { "wire": "openai/models", "endpoint": "https://api.deepseek.com", "adapter": "openai-compatible" },
-        { "wire": "anthropic/messages", "endpoint": "https://api.deepseek.com/anthropic/messages", "adapter": "anthropic-compatible", "docs": "https://api-docs.deepseek.com/guides/anthropic_api", "note": "Same models, Anthropic wire format (for Claude Code and Anthropic SDKs). Claude model aliases map server-side to DeepSeek models.", "models": ["deepseek-v4-flash", "deepseek-v4-pro"] },
-        { "wire": "anthropic/models", "endpoint": "https://api.deepseek.com/anthropic", "adapter": "anthropic-compatible" }
+        { "wire": "anthropic/messages", "endpoint": "https://api.deepseek.com/anthropic/messages", "adapter": "anthropic-compatible", "docs": "https://api-docs.deepseek.com/guides/anthropic_api", "note": "Same models, Anthropic wire format (for Claude Code and Anthropic SDKs). Claude model aliases map server-side to DeepSeek models.", "models": ["deepseek-v4-flash", "deepseek-v4-pro"] }
       ]
     },
     {
@@ -98,7 +96,7 @@
         { "wire": "openai/embeddings", "endpoint": "https://ark.cn-beijing.volces.com/api/plan/v3/embeddings", "adapter": "openai-compatible", "docs": "https://www.volcengine.com/docs/82379/1302010", "note": "Ark Agent Plan embedding model — billed per token via overage pay-as-you-go (开启超额后付费), not the flat subscription. Specify the model explicitly; it can't be reached through Auto routing or the console model switcher.", "models": ["doubao-embedding-vision"] },
         { "wire": "openai/images", "endpoint": "https://ark.cn-beijing.volces.com/api/plan/v3/images/generations", "adapter": "openai-compatible", "docs": "https://www.volcengine.com/docs/82379/2375486", "note": "Ark Agent Plan image generation (Seedream), OpenAI-compatible /images/generations. PLACEHOLDER PRICE: billed a flat $1 per call pending real per-image rates. Specify the model explicitly; vision models aren't reachable via Auto routing or the console switcher.", "models": ["doubao-seedream-5.0-lite"] },
         { "wire": "ark/video", "endpoint": "https://ark.cn-beijing.volces.com/api/plan/v3/contents/generations/tasks", "adapter": "openai-compatible", "docs": "https://www.volcengine.com/docs/82379/2375486", "note": "Ark Agent Plan video generation (Seedance), async task API at /contents/generations/tasks. PLACEHOLDER PRICE: billed a flat $1 per create-task call (the task response carries no usage; actual per-second/resolution cost needs task polling, not yet built). Medium 套餐 doesn't include Seedance 2.0; vision models aren't reachable via Auto routing or the console switcher.", "models": ["doubao-seedance-2.0", "doubao-seedance-2.0-fast", "doubao-seedance-1.5-pro"] },
-        { "wire": "volc/tts-unidirectional", "endpoint": "https://openspeech.bytedance.com", "adapter": "volc-speech", "docs": "https://www.volcengine.com/docs/82379/2516286", "note": "Ark Agent Plan TTS (豆包语音合成 2.0), HTTP unidirectional — plan path /api/v3/plan/tts/unidirectional matches the /tts/unidirectional suffix. Auth via X-Api-Key with X-Api-Resource-Id=seed-tts-2.0, billed per character via overage pay-as-you-go (开启超额后付费). Specify the model explicitly; not reachable via Auto routing or the console switcher.", "models": ["seed-tts-2.0"] },
+        { "wire": "volc/tts-unidirectional", "endpoint": "https://openspeech.bytedance.com/api/v3/plan/tts/unidirectional", "adapter": "volc-speech", "docs": "https://www.volcengine.com/docs/82379/2516286", "note": "Ark Agent Plan TTS (豆包语音合成 2.0), HTTP unidirectional. Full path because the plan rewrites the native /api/v3/tts/unidirectional to /api/v3/plan/tts/unidirectional. Auth via X-Api-Key with X-Api-Resource-Id=seed-tts-2.0, billed per character via overage pay-as-you-go (开启超额后付费). Specify the model explicitly; not reachable via Auto routing or the console switcher.", "models": ["seed-tts-2.0"] },
         { "wire": "volc/tts-unidirectional-stream", "endpoint": "https://openspeech.bytedance.com", "adapter": "volc-speech", "docs": "https://www.volcengine.com/docs/82379/2516286", "note": "Ark Agent Plan TTS (豆包语音合成 2.0), WebSocket unidirectional stream (.../api/v3/plan/tts/unidirectional-stream). Reach it at the native path with the X-Songguo-Provider header; auth X-Api-Key with X-Api-Resource-Id=seed-tts-2.0. UNMETERED: WebSocket sessions are relayed as realtime and recorded at $0. Not reachable via Auto routing or the console switcher.", "models": ["seed-tts-2.0"] },
         { "wire": "volc/tts-bidirectional", "endpoint": "https://openspeech.bytedance.com", "adapter": "volc-speech", "docs": "https://www.volcengine.com/docs/82379/2516286", "note": "Ark Agent Plan TTS (豆包语音合成 2.0), WebSocket bidirectional (.../api/v3/plan/tts/bidirection). Reach it at the native path with the X-Songguo-Provider header; auth X-Api-Key with X-Api-Resource-Id=seed-tts-2.0. UNMETERED: WebSocket sessions are relayed as realtime and recorded at $0. Not reachable via Auto routing or the console switcher.", "models": ["seed-tts-2.0"] },
         { "wire": "volc/asr-stream-async", "endpoint": "https://openspeech.bytedance.com", "adapter": "volc-speech", "docs": "https://www.volcengine.com/docs/82379/2516286", "note": "Ark Agent Plan ASR (豆包流式语音识别 2.0), WebSocket streaming with incremental hypotheses (wss .../api/v3/plan/sauc/bigmodel_async). Reach it at the native path with the X-Songguo-Provider header; auth X-Api-Key with X-Api-Resource-Id=volc.seedasr.sauc.duration. UNMETERED: WebSocket sessions are relayed as realtime and recorded at $0 — duration pricing is deferred system-wide, so the per_second price here is not yet applied. Not reachable via Auto routing or the console switcher.", "models": ["doubao-seed-asr-2.0"] },
@@ -115,7 +113,7 @@
         "doubao-seed-asr-2.0": { "input": 0.0, "output": 0.0, "unit": "per_second", "modalities": ["audio"] }
       },
       "endpoints": [
-        { "wire": "volc/tts-unidirectional", "endpoint": "https://openspeech.bytedance.com", "adapter": "volc-speech", "docs": "https://www.volcengine.com/docs/6561/2528925", "note": "豆包语音 synthesis, HTTP unidirectional. Auth swaps to X-Api-Key; X-Api-Resource-Id picks the model. Model-less: call the native /api/v3/tts/unidirectional with the X-Songguo-Provider header, billed per character (¥3/万字符 ÷ 7.2; set X-Control-Require-Usage-Tokens-Return to report usage).", "models": ["seed-tts-2.0", "seed-icl-2.0"] },
+        { "wire": "volc/tts-unidirectional", "endpoint": "https://openspeech.bytedance.com/api/v3/tts/unidirectional", "adapter": "volc-speech", "docs": "https://www.volcengine.com/docs/6561/2528925", "note": "豆包语音 synthesis, HTTP unidirectional. Full upstream path; auth swaps to X-Api-Key; X-Api-Resource-Id picks the model, billed per character (¥3/万字符 ÷ 7.2; set X-Control-Require-Usage-Tokens-Return to report usage).", "models": ["seed-tts-2.0", "seed-icl-2.0"] },
         { "wire": "volc/tts-unidirectional-stream", "endpoint": "https://openspeech.bytedance.com", "adapter": "volc-speech", "docs": "https://www.volcengine.com/docs/6561/2528925", "note": "豆包语音 synthesis, WebSocket unidirectional stream. Model-less: native .../api/v3/tts/unidirectional-stream with the X-Songguo-Provider header; auth X-Api-Key, X-Api-Resource-Id picks the model. WS meters as realtime bytes ($0).", "models": ["seed-tts-2.0", "seed-icl-2.0"] },
         { "wire": "volc/tts-bidirectional", "endpoint": "https://openspeech.bytedance.com", "adapter": "volc-speech", "docs": "https://www.volcengine.com/docs/6561/2528925", "note": "豆包语音 synthesis, WebSocket bidirectional. Model-less: native .../api/v3/tts/bidirection with the X-Songguo-Provider header; auth X-Api-Key, X-Api-Resource-Id picks the model. WS meters as realtime bytes ($0).", "models": ["seed-tts-2.0", "seed-icl-2.0"] },
         { "wire": "volc/voice-clone", "endpoint": "https://openspeech.bytedance.com", "adapter": "volc-speech", "docs": "https://www.volcengine.com/docs/6561/2227958", "note": "Voice cloning, model-less: native /api/v3/tts/voice_clone and .../api/v3/tts/get_voice with the X-Songguo-Provider header. Metered free — the per-voice slot fee is billed by Volcengine on first synthesis." },
@@ -142,8 +140,7 @@
         { "wire": "openai/embeddings", "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings", "adapter": "openai-compatible", "docs": "https://help.aliyun.com/zh/model-studio/developer-reference/text-embedding-api", "models": ["text-embedding-v3", "text-embedding-v4"] },
         { "wire": "openai/completions", "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1/completions", "adapter": "openai-compatible" },
         { "wire": "openai/models", "endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1", "adapter": "openai-compatible" },
-        { "wire": "anthropic/messages", "endpoint": "https://dashscope.aliyuncs.com/apps/anthropic/messages", "adapter": "anthropic-compatible", "docs": "https://help.aliyun.com/zh/model-studio/claude-code", "note": "Same Qwen models, Anthropic wire format (for Claude Code and Anthropic SDKs).", "models": ["qwen3-max", "qwen3-coder-plus"] },
-        { "wire": "anthropic/models", "endpoint": "https://dashscope.aliyuncs.com/apps/anthropic", "adapter": "anthropic-compatible" }
+        { "wire": "anthropic/messages", "endpoint": "https://dashscope.aliyuncs.com/apps/anthropic/messages", "adapter": "anthropic-compatible", "docs": "https://help.aliyun.com/zh/model-studio/claude-code", "note": "Same Qwen models, Anthropic wire format (for Claude Code and Anthropic SDKs).", "models": ["qwen3-max", "qwen3-coder-plus"] }
       ]
     },
     {
@@ -158,8 +155,7 @@
       "endpoints": [
         { "wire": "openai/chat", "endpoint": "https://api.minimaxi.com/v1/chat/completions", "adapter": "openai-compatible", "docs": "https://platform.minimaxi.com/docs/api-reference/text-openai-api", "note": "Implicit prompt caching (≥512 input tokens); cached tokens under prompt_tokens_details. Prices are CNY list ÷ 7.2.", "models": ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"] },
         { "wire": "openai/models", "endpoint": "https://api.minimaxi.com/v1", "adapter": "openai-compatible" },
-        { "wire": "anthropic/messages", "endpoint": "https://api.minimaxi.com/anthropic/messages", "adapter": "anthropic-compatible", "docs": "https://platform.minimaxi.com/docs/api-reference/text-anthropic-api", "note": "Same models, Anthropic wire format. Caching is explicit cache_control, 5-minute TTL.", "models": ["MiniMax-M3", "MiniMax-M2.7"] },
-        { "wire": "anthropic/models", "endpoint": "https://api.minimaxi.com/anthropic", "adapter": "anthropic-compatible" }
+        { "wire": "anthropic/messages", "endpoint": "https://api.minimaxi.com/anthropic/messages", "adapter": "anthropic-compatible", "docs": "https://platform.minimaxi.com/docs/api-reference/text-anthropic-api", "note": "Same models, Anthropic wire format. Caching is explicit cache_control, 5-minute TTL.", "models": ["MiniMax-M3", "MiniMax-M2.7"] }
       ]
     },
     {
@@ -177,8 +173,7 @@
       "endpoints": [
         { "wire": "openai/chat", "endpoint": "https://open.bigmodel.cn/api/paas/v4/chat/completions", "adapter": "openai-compatible", "docs": "https://docs.bigmodel.cn/cn/api/introduction", "note": "No /models listing endpoint. Implicit caching; cached tokens under prompt_tokens_details. Prices are CNY list ÷ 7.2 — verify at bigmodel.cn/pricing (Zhipu repriced several times in 2026).", "models": ["glm-5.1", "glm-5", "glm-4.7", "glm-4.7-flash"] },
         { "wire": "openai/embeddings", "endpoint": "https://open.bigmodel.cn/api/paas/v4/embeddings", "adapter": "openai-compatible", "docs": "https://docs.bigmodel.cn/cn/guide/models/embedding/embedding-3.md", "models": ["embedding-3"] },
-        { "wire": "anthropic/messages", "endpoint": "https://open.bigmodel.cn/api/anthropic/messages", "adapter": "anthropic-compatible", "docs": "https://docs.bigmodel.cn/cn/guide/develop/claude/introduction.md", "note": "Same GLM models, Anthropic wire format. Claude Code aliases map server-side: Opus → glm-5.1, Sonnet → glm-5-turbo, Haiku → glm-4.7-flash.", "models": ["glm-5.1", "glm-5-turbo", "glm-4.7-flash"] },
-        { "wire": "anthropic/models", "endpoint": "https://open.bigmodel.cn/api/anthropic", "adapter": "anthropic-compatible" }
+        { "wire": "anthropic/messages", "endpoint": "https://open.bigmodel.cn/api/anthropic/messages", "adapter": "anthropic-compatible", "docs": "https://docs.bigmodel.cn/cn/guide/develop/claude/introduction.md", "note": "Same GLM models, Anthropic wire format. Claude Code aliases map server-side: Opus → glm-5.1, Sonnet → glm-5-turbo, Haiku → glm-4.7-flash.", "models": ["glm-5.1", "glm-5-turbo", "glm-4.7-flash"] }
       ]
     },
     {
@@ -194,8 +189,7 @@
       "endpoints": [
         { "wire": "openai/chat", "endpoint": "https://api.moonshot.cn/v1/chat/completions", "adapter": "openai-compatible", "docs": "https://platform.kimi.com/docs/api/overview.md", "note": "Automatic context caching on k2.5+; cached tokens reported as top-level usage.cached_tokens. Prices are CNY list ÷ 7.2.", "models": ["kimi-k2.6", "kimi-k2.5"] },
         { "wire": "openai/models", "endpoint": "https://api.moonshot.cn/v1", "adapter": "openai-compatible" },
-        { "wire": "anthropic/messages", "endpoint": "https://api.moonshot.cn/anthropic/messages", "adapter": "anthropic-compatible", "docs": "https://platform.kimi.com/docs/guide/agent-support.md", "note": "Same models, Anthropic wire format. Moonshot's recommended Claude Code model is kimi-k2.7-code (thinking always on).", "models": ["kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5"] },
-        { "wire": "anthropic/models", "endpoint": "https://api.moonshot.cn/anthropic", "adapter": "anthropic-compatible" }
+        { "wire": "anthropic/messages", "endpoint": "https://api.moonshot.cn/anthropic/messages", "adapter": "anthropic-compatible", "docs": "https://platform.kimi.com/docs/guide/agent-support.md", "note": "Same models, Anthropic wire format. Moonshot's recommended Claude Code model is kimi-k2.7-code (thinking always on).", "models": ["kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5"] }
       ]
     },
     {
@@ -221,8 +215,7 @@
         { "wire": "openai/embeddings", "endpoint": "{base}/embeddings", "adapter": "openai-compatible" },
         { "wire": "openai/images", "endpoint": "{base}/images/generations", "adapter": "openai-compatible" },
         { "wire": "openai/models", "endpoint": "{base}", "adapter": "openai-compatible" },
-        { "wire": "anthropic/messages", "endpoint": "{base}/messages", "adapter": "anthropic-compatible" },
-        { "wire": "anthropic/models", "endpoint": "{base}", "adapter": "anthropic-compatible" }
+        { "wire": "anthropic/messages", "endpoint": "{base}/messages", "adapter": "anthropic-compatible" }
       ]
     }
   ]

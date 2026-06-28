@@ -81,7 +81,7 @@ export function wireTests(wires: string[]): WireTest[] {
 //     fallback) --------------------------------------------------------------
 
 /** Default TTS voice — shared by the synthesis panel and its snippet. */
-export const DEFAULT_TTS_VOICE = 'zh_female_vv_jupiter_bigtts';
+export const DEFAULT_TTS_VOICE = 'zh_female_vv_uranus_bigtts';
 
 export interface SnippetOpts {
   /** Model id (model-routed bodies and the default placeholder). */
@@ -739,7 +739,7 @@ export interface TtsParams {
   resourceId: string;
   /** Text to synthesize. */
   text: string;
-  /** Voice id (speaker), e.g. "zh_female_vv_jupiter_bigtts". */
+  /** Voice id (speaker), e.g. "zh_female_vv_uranus_bigtts". */
   voice: string;
   /** Audio container: "mp3" | "wav" | "ogg_opus". */
   format: string;

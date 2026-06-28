@@ -441,11 +441,17 @@ func (h *handler) resolve(w http.ResponseWriter, r *http.Request, user store.Use
 		wires:    wires,
 		upstreamURL: func(t router.Target) string {
 			if rw, ok := wires[t.Vendor.Name]; ok && rw.matched {
-				if ep, ok := t.Vendor.Endpoints[rw.wire.Name]; ok {
+				// A path-bearing endpoint is the fixed upstream URL — a rewrite
+				// (e.g. /v1/chat/completions -> /api/plan/v3/chat/completions).
+				// An origin-only endpoint (scheme://host, no path) is a transparent
+				// passthrough: keep the inbound path. That lets one wire cover several
+				// native suffixes (e.g. volc/asr-file submit+query) and stops a
+				// path-less endpoint from silently POSTing to the host root.
+				if ep, ok := t.Vendor.Endpoints[rw.wire.Name]; ok && endpointHasPath(ep) {
 					return buildUpstreamURL(ep, model, r.URL.RawQuery)
 				}
 			}
-			// allow_unmatched (or a matched wire without a stored endpoint):
+			// allow_unmatched, or a matched wire whose endpoint is origin-only:
 			// forward the inbound path verbatim to the vendor origin.
 			return joinQuery(strings.TrimRight(t.Vendor.Origin, "/")+r.URL.Path, r.URL.RawQuery)
 		},
@@ -557,6 +563,20 @@ func joinQuery(u, rawQuery string) string {
 func buildUpstreamURL(endpoint, model, inboundQuery string) string {
 	u := strings.ReplaceAll(endpoint, "{model}", url.PathEscape(model))
 	return mergeQuery(u, inboundQuery)
+}
+
+// endpointHasPath reports whether a configured endpoint carries a path beyond
+// the bare origin. An origin-only endpoint (scheme://host or scheme://host/)
+// signals a transparent passthrough — the inbound request path is forwarded
+// unchanged — while a path-bearing endpoint is the fixed upstream URL to
+// rewrite to. A malformed endpoint is treated as explicit (config validation
+// surfaces it elsewhere).
+func endpointHasPath(endpoint string) bool {
+	u, err := url.Parse(strings.ReplaceAll(endpoint, "{model}", "m"))
+	if err != nil {
+		return true
+	}
+	return strings.Trim(u.Path, "/") != ""
 }
 
 // mergeQuery appends inboundQuery to a URL that may already carry its own query

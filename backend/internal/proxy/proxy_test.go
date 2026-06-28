@@ -1061,6 +1061,54 @@ vendors:
 	}
 }
 
+// --- Test 13b2: an origin-only endpoint on a MATCHED wire is a transparent
+// passthrough — it forwards the inbound path verbatim rather than POSTing to the
+// host root. This lets one wire span several native suffixes; volc/asr-file
+// (submit + query) is the canonical case. A path-bearing endpoint would instead
+// rewrite to that fixed path (see TestModelRoutedNonV1Prefix). Regression: a
+// bare-origin endpoint used to be used verbatim, so every suffix hit "/" and
+// 404'd. ---
+
+func TestOriginOnlyEndpointPassesThroughPath(t *testing.T) {
+	rec := &pathRecorder{}
+	mock := httptest.NewServer(rec.handler())
+	defer mock.Close()
+
+	// volc/asr-file is a model-less, multi-suffix wire whose endpoint is the bare
+	// origin (scheme://host, no path), so submit and query each keep their path.
+	yaml := fmt.Sprintf(`
+vendors:
+  - name: volc
+    origin: %s
+    adapter: volc-speech
+    served_models: [doubao-seed-asr-2.0]
+    priority: 1
+    endpoints:
+      volc/asr-file: %s
+    credential: {id: volcKey, api_key: volc-secret}
+`, mock.URL, mock.URL)
+
+	st := openStore(t)
+	_, key := mustUser(t, st, store.NewUser{Name: "t"})
+	env := newEnv(t, snapshotFunc(t, yaml), st)
+
+	for _, p := range []string{"/api/v3/auc/bigmodel/submit", "/api/v3/auc/bigmodel/query"} {
+		resp := env.post(t, p, key, `{}`)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("POST %s status = %d, want 200 (origin-only endpoint must forward, not 404 at root)", p, resp.StatusCode)
+		}
+	}
+
+	rec.mu.Lock()
+	got := append([]string(nil), rec.paths...)
+	rec.mu.Unlock()
+	want := []string{"/api/v3/auc/bigmodel/submit", "/api/v3/auc/bigmodel/query"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("upstream paths = %v, want %v (origin-only endpoint must keep the inbound path)", got, want)
+	}
+}
+
 // --- Test 13c: a model-less POST carrying only X-Api-Resource-Id routes by
 // endpoint, not by the resource id as if it were a model. Regression: the
 // resource id (a billing class, e.g. volc.seedasr.auc) used to be assigned to
@@ -1341,7 +1389,7 @@ vendors:
     adapter: anthropic-compatible
     served_models: [claude-x]
     priority: 1
-    wires: [anthropic/messages, anthropic/models]
+    wires: [anthropic/messages]
     credential: {id: credAn, api_key: anthro-key}
     prices:
       claude-x: { input: 3.0, output: 15.0, cached_input: 0.3, unit: per_1m_tokens }

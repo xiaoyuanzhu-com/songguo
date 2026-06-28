@@ -487,7 +487,7 @@ func (s *Store) tableExists(name string) (bool, error) {
 // only on the migration that introduces provider_wires.
 func (s *Store) backfillWires() error {
 	defaults := map[string][]string{
-		"anthropic-compatible": {"anthropic/messages", "anthropic/models"},
+		"anthropic-compatible": {"anthropic/messages"},
 		"":                     {"openai/chat", "openai/completions", "openai/embeddings", "openai/models"},
 	}
 	rows, err := s.db.Query(`SELECT id, adapter FROM providers`)
