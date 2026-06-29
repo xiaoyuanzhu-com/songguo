@@ -109,6 +109,8 @@ func TestAuthRequiredOnAllEndpoints(t *testing.T) {
 	endpoints := []struct{ method, path string }{
 		{"GET", "/api/overview"},
 		{"GET", "/api/usage/series"},
+		{"GET", "/api/usage/breakdown?dimension=model"},
+		{"GET", "/api/usage/errors"},
 		{"GET", "/api/calls"},
 		{"GET", "/api/calls/export?format=csv"},
 		{"GET", "/api/users"},
@@ -441,7 +443,7 @@ func TestOverviewMath(t *testing.T) {
 	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
 	// Spend within the last 7 days for daily_burn. Put 14.0 total over the week.
 	weekEntries := []calls.Entry{
-		{TS: now.Add(-24 * time.Hour), UserID: tok.ID, Model: "gpt-4o", Modality: calls.ModalityChat, Vendor: "openai", Status: 200, Cost: 6.0, LatencyMS: 100},
+		{TS: now.Add(-24 * time.Hour), UserID: tok.ID, Model: "gpt-4o", Modality: calls.ModalityChat, Vendor: "openai", Status: 200, Cost: 6.0, LatencyMS: 100, InputTokens: 100, OutputTokens: 20, CachedTokens: 40},
 		{TS: now.Add(-48 * time.Hour), UserID: tok.ID, Model: "dall-e-3", Modality: calls.ModalityImage, Vendor: "openai", Status: 500, Cost: 1.0, LatencyMS: 300},
 		{TS: now.Add(-72 * time.Hour), UserID: tok.ID, Model: "tts-1", Modality: calls.ModalityTTS, Vendor: "openai", Status: 0, Cost: 7.0, LatencyMS: 200},
 	}
@@ -490,6 +492,14 @@ func TestOverviewMath(t *testing.T) {
 	if ov.UsersActive != 1 {
 		t.Errorf("users_active = %d, want 1", ov.UsersActive)
 	}
+	// All three calls belong to the same user -> one distinct caller.
+	if ov.ActiveCallers != 1 {
+		t.Errorf("active_callers = %d, want 1", ov.ActiveCallers)
+	}
+	// Tokens summed across the window (only the chat call carried tokens).
+	if !approxF(ov.Tokens.Input, 100) || !approxF(ov.Tokens.Output, 20) || !approxF(ov.Tokens.Cached, 40) {
+		t.Errorf("tokens = %+v, want {100 20 40}", ov.Tokens)
+	}
 	// daily_burn = 14 / 7 = 2.0.
 	if !approxF(ov.DailyBurn, 2.0) {
 		t.Errorf("daily_burn = %v, want 2", ov.DailyBurn)
@@ -518,6 +528,69 @@ func TestOverviewNullRunwayNoBudget(t *testing.T) {
 	decodeBody(t, rec, &ov)
 	if ov.RunwayDays != nil {
 		t.Errorf("runway_days = %v, want null (no budgeted tokens)", *ov.RunwayDays)
+	}
+}
+
+func TestUsageBreakdown(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+	entries := []calls.Entry{
+		{TS: now.Add(-time.Hour), Model: "gpt-4o", Vendor: "openai", Status: 200, Cost: 1, LatencyMS: 100, InputTokens: 100, OutputTokens: 10},
+		{TS: now.Add(-2 * time.Hour), Model: "gpt-4o", Vendor: "openai", Status: 500, Cost: 0.5, LatencyMS: 300, InputTokens: 50},
+		{TS: now.Add(-3 * time.Hour), Model: "claude", Vendor: "anthropic", Status: 200, Cost: 0.2, LatencyMS: 50, InputTokens: 20, OutputTokens: 5},
+	}
+	for i, e := range entries {
+		if _, err := s.AppendCall(e); err != nil {
+			t.Fatalf("AppendCall[%d]: %v", i, err)
+		}
+	}
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret", Now: func() time.Time { return now }})
+
+	rec := do(h, "GET", "/api/usage/breakdown?dimension=model", "secret", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("breakdown: code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var v breakdownView
+	decodeBody(t, rec, &v)
+	if v.Dimension != "model" {
+		t.Errorf("dimension = %q, want model", v.Dimension)
+	}
+	if len(v.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(v.Rows))
+	}
+	// Ordered by request count desc: gpt-4o (2) first.
+	if v.Rows[0].Key != "gpt-4o" || v.Rows[0].Requests != 2 || v.Rows[0].Errors != 1 {
+		t.Errorf("rows[0] = %+v, want gpt-4o 2req/1err", v.Rows[0])
+	}
+	if !approxF(v.Rows[0].InputTokens, 150) || !approxF(v.Rows[0].Cost, 1.5) {
+		t.Errorf("rows[0] sums = %+v", v.Rows[0])
+	}
+
+	// Unknown dimension -> 400.
+	bad := do(h, "GET", "/api/usage/breakdown?dimension=bogus", "secret", nil)
+	if bad.Code != http.StatusBadRequest {
+		t.Errorf("bad dimension: code = %d, want 400", bad.Code)
+	}
+}
+
+func TestUsageErrors(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+	for i, st := range []int{200, 429, 404, 500, 0} {
+		if _, err := s.AppendCall(calls.Entry{TS: now.Add(-time.Duration(i+1) * time.Hour), Vendor: "openai", Status: st}); err != nil {
+			t.Fatalf("AppendCall[%d]: %v", i, err)
+		}
+	}
+	h := testHandler(t, Deps{Store: s, AdminKey: "secret", Now: func() time.Time { return now }})
+
+	rec := do(h, "GET", "/api/usage/errors", "secret", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("errors: code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var v errorsView
+	decodeBody(t, rec, &v)
+	if v.RateLimited != 1 || v.ClientError != 1 || v.ServerError != 1 || v.Transport != 1 {
+		t.Errorf("error classes = %+v, want 1 each", v)
 	}
 }
 

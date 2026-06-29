@@ -100,6 +100,8 @@ type adminRoute struct {
 var adminRoutes = []adminRoute{
 	{"GET", "/api/overview", (*api).handleOverview},
 	{"GET", "/api/usage/series", (*api).handleUsageSeries},
+	{"GET", "/api/usage/breakdown", (*api).handleBreakdown},
+	{"GET", "/api/usage/errors", (*api).handleErrors},
 	{"GET", "/api/calls", (*api).handleCalls},
 	{"GET", "/api/calls/export", (*api).handleCallsExport},
 	{"GET", "/api/calls/{id}/trace", (*api).handleCallTrace},

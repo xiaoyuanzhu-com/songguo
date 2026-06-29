@@ -54,7 +54,13 @@ type Entry struct {
 	Status       int            // upstream HTTP status (0 if no response)
 	Err          string         // error detail if any
 	Usage        map[string]any // raw extracted usage (tokens/images/seconds/...), JSON-encoded in DB
-	Cost         float64        // computed cost in USD (0 if unknown/free)
+	// Normalized cross-vendor token counts (persisted as typed columns so usage
+	// is queryable without parsing the per-vendor `Usage` JSON). CachedTokens is
+	// a subset of InputTokens billed at the cached rate.
+	InputTokens  float64
+	OutputTokens float64
+	CachedTokens float64
+	Cost         float64 // computed cost in USD (0 if unknown/free)
 	LatencyMS    int64
 	Stream       bool
 	Tags         map[string]string // optional business attribution (may be nil)

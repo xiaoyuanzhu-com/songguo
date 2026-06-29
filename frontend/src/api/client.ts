@@ -1,10 +1,13 @@
 import type {
+  Breakdown,
+  BreakdownDimension,
   CallsFilters,
   CallsPage,
   CallTrace,
   Catalog,
   CreateProviderBody,
   CreateUserBody,
+  ErrorBreakdown,
   Overview,
   PatchProviderBody,
   PatchUserBody,
@@ -141,6 +144,12 @@ export const api = {
 
   series: (since: number, until: number, bucket: 'hour' | 'day') =>
     request<UsageSeries>(`/usage/series${qs({ since, until, bucket })}`),
+
+  breakdown: (dimension: BreakdownDimension, since: number, until: number) =>
+    request<Breakdown>(`/usage/breakdown${qs({ dimension, since, until })}`),
+
+  errors: (since: number, until: number) =>
+    request<ErrorBreakdown>(`/usage/errors${qs({ since, until })}`),
 
   calls: (f: CallsFilters) => request<CallsPage>(`/calls${callsQuery(f)}`),
 

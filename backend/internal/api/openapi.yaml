@@ -66,6 +66,42 @@ paths:
               schema: { $ref: "#/components/schemas/UsageSeries" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/usage/breakdown:
+    get:
+      tags: [usage]
+      summary: Per-dimension usage breakdown (model, vendor, user, or modality)
+      operationId: getUsageBreakdown
+      parameters:
+        - name: dimension
+          in: query
+          required: true
+          schema: { type: string, enum: [model, vendor, user, modality] }
+          description: Column to group by.
+        - $ref: "#/components/parameters/Since"
+        - $ref: "#/components/parameters/Until"
+      responses:
+        "200":
+          description: Breakdown
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Breakdown" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/usage/errors:
+    get:
+      tags: [usage]
+      summary: Error-row counts grouped by class over a window
+      operationId: getUsageErrors
+      parameters:
+        - $ref: "#/components/parameters/Since"
+        - $ref: "#/components/parameters/Until"
+      responses:
+        "200":
+          description: Error counts by class
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UsageErrors" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /api/calls:
     get:
       tags: [calls]
@@ -464,14 +500,22 @@ components:
         spend_by_modality:
           type: object
           additionalProperties: { type: number }
+        tokens: { $ref: "#/components/schemas/TokenTotals" }
         requests: { type: integer }
         errors: { type: integer }
         error_rate: { type: number }
         latency_ms: { $ref: "#/components/schemas/Latency" }
         vendors_active: { type: integer }
         users_active: { type: integer }
+        active_callers: { type: integer, description: Distinct users with traffic in the window }
         daily_burn: { type: number }
         runway_days: { type: [number, "null"] }
+    TokenTotals:
+      type: object
+      properties:
+        input: { type: number }
+        output: { type: number }
+        cached: { type: number, description: Subset of input billed at the cached rate }
     SeriesPoint:
       type: object
       properties:
@@ -479,11 +523,40 @@ components:
         cost: { type: number }
         requests: { type: integer }
         errors: { type: integer }
+        input_tokens: { type: number }
+        output_tokens: { type: number }
+        cached_tokens: { type: number }
+        avg_latency_ms: { type: number }
     UsageSeries:
       type: object
       properties:
         bucket: { type: string }
         points: { type: array, items: { $ref: "#/components/schemas/SeriesPoint" } }
+    BreakdownRow:
+      type: object
+      properties:
+        key: { type: string }
+        requests: { type: integer }
+        errors: { type: integer }
+        input_tokens: { type: number }
+        output_tokens: { type: number }
+        cached_tokens: { type: number }
+        cost: { type: number }
+        avg_latency_ms: { type: number }
+    Breakdown:
+      type: object
+      properties:
+        range: { $ref: "#/components/schemas/Range" }
+        dimension: { type: string, enum: [model, vendor, user, modality] }
+        rows: { type: array, items: { $ref: "#/components/schemas/BreakdownRow" } }
+    UsageErrors:
+      type: object
+      properties:
+        range: { $ref: "#/components/schemas/Range" }
+        rate_limited: { type: integer, description: HTTP 429 }
+        client_error: { type: integer, description: Other 4xx }
+        server_error: { type: integer, description: 5xx }
+        transport: { type: integer, description: status 0 (no response) }
     Call:
       type: object
       properties:

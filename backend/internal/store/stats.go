@@ -209,6 +209,162 @@ func (s *Store) ModelStats(since, until *time.Time) (map[string]ModelStat, error
 	return out, nil
 }
 
+// TokenTotals holds summed normalized token counts over a window.
+type TokenTotals struct {
+	Input  float64
+	Output float64
+	Cached float64
+}
+
+// TokenTotals sums normalized input/output/cached tokens over the optional
+// [since, until) window.
+func (s *Store) TokenTotals(since, until *time.Time) (TokenTotals, error) {
+	clause, args := windowClause(since, until)
+	var t TokenTotals
+	err := s.db.QueryRow(
+		`SELECT COALESCE(SUM(input_tokens), 0),
+		        COALESCE(SUM(output_tokens), 0),
+		        COALESCE(SUM(cached_tokens), 0)
+		   FROM calls`+clause, args...,
+	).Scan(&t.Input, &t.Output, &t.Cached)
+	if err != nil {
+		return TokenTotals{}, fmt.Errorf("store: token totals: %w", err)
+	}
+	return t, nil
+}
+
+// DistinctUsers counts distinct non-empty user_ids with at least one call in the
+// optional [since, until) window. The empty user id (admin/unknown traffic) is
+// excluded so the count reflects real callers.
+func (s *Store) DistinctUsers(since, until *time.Time) (int, error) {
+	clause, args := windowClause(since, until)
+	if clause == "" {
+		clause = " WHERE user_id != ''"
+	} else {
+		clause += " AND user_id != ''"
+	}
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(DISTINCT user_id) FROM calls`+clause, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: distinct users: %w", err)
+	}
+	return n, nil
+}
+
+// BreakdownDimension is a column the call log can be grouped by.
+type BreakdownDimension string
+
+const (
+	BreakdownByModel    BreakdownDimension = "model"
+	BreakdownByVendor   BreakdownDimension = "vendor"
+	BreakdownByUser     BreakdownDimension = "user"
+	BreakdownByModality BreakdownDimension = "modality"
+)
+
+// ErrBadDimension is returned by Breakdown for an unrecognized dimension.
+var ErrBadDimension = errors.New("store: unknown breakdown dimension")
+
+// breakdownColumn maps a dimension to its calls column, whitelisting the input so
+// it can be safely interpolated into the query (column names cannot be bound as
+// query parameters).
+func breakdownColumn(d BreakdownDimension) (string, bool) {
+	switch d {
+	case BreakdownByModel:
+		return "model", true
+	case BreakdownByVendor:
+		return "vendor", true
+	case BreakdownByUser:
+		return "user_id", true
+	case BreakdownByModality:
+		return "modality", true
+	default:
+		return "", false
+	}
+}
+
+// BreakdownRow is one group's aggregates in a Breakdown result.
+type BreakdownRow struct {
+	Key          string
+	Requests     int
+	Errors       int
+	InputTokens  float64
+	OutputTokens float64
+	CachedTokens float64
+	Cost         float64
+	AvgLatencyMS float64
+}
+
+// Breakdown groups the call log by dimension over the optional [since, until)
+// window, returning per-group request/error counts, token sums, cost, and mean
+// latency, ordered by request count descending. dimension must be one of the
+// Breakdown* constants; otherwise ErrBadDimension is returned.
+func (s *Store) Breakdown(dimension BreakdownDimension, since, until *time.Time) ([]BreakdownRow, error) {
+	col, ok := breakdownColumn(dimension)
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", ErrBadDimension, dimension)
+	}
+	clause, args := windowClause(since, until)
+	rows, err := s.db.Query(
+		`SELECT `+col+` AS k,
+		        COUNT(*),
+		        SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END),
+		        COALESCE(SUM(input_tokens), 0),
+		        COALESCE(SUM(output_tokens), 0),
+		        COALESCE(SUM(cached_tokens), 0),
+		        COALESCE(SUM(cost), 0),
+		        COALESCE(AVG(latency_ms), 0)
+		   FROM calls`+clause+`
+		  GROUP BY k
+		  ORDER BY COUNT(*) DESC, k ASC`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: breakdown: %w", err)
+	}
+	defer rows.Close()
+
+	var out []BreakdownRow
+	for rows.Next() {
+		var r BreakdownRow
+		if err := rows.Scan(&r.Key, &r.Requests, &r.Errors,
+			&r.InputTokens, &r.OutputTokens, &r.CachedTokens, &r.Cost, &r.AvgLatencyMS); err != nil {
+			return nil, fmt.Errorf("store: scan breakdown: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: breakdown: %w", err)
+	}
+	return out, nil
+}
+
+// ErrorClasses counts error rows by class over a window. Successful rows
+// (status 2xx/3xx) are not counted in any field.
+type ErrorClasses struct {
+	RateLimited int // HTTP 429
+	ClientError int // other 4xx
+	ServerError int // 5xx
+	Transport   int // status 0 (no response / transport failure)
+}
+
+// ErrorClassCounts groups error rows into {rate-limited, client, server,
+// transport} over the optional [since, until) window.
+func (s *Store) ErrorClassCounts(since, until *time.Time) (ErrorClasses, error) {
+	clause, args := windowClause(since, until)
+	var c ErrorClasses
+	err := s.db.QueryRow(
+		`SELECT
+		   COALESCE(SUM(CASE WHEN status = 429 THEN 1 ELSE 0 END), 0),
+		   COALESCE(SUM(CASE WHEN status >= 400 AND status < 500 AND status != 429 THEN 1 ELSE 0 END), 0),
+		   COALESCE(SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END), 0),
+		   COALESCE(SUM(CASE WHEN status = 0 THEN 1 ELSE 0 END), 0)
+		 FROM calls`+clause, args...,
+	).Scan(&c.RateLimited, &c.ClientError, &c.ServerError, &c.Transport)
+	if err != nil {
+		return ErrorClasses{}, fmt.Errorf("store: error class counts: %w", err)
+	}
+	return c, nil
+}
+
 // maxSeriesBuckets caps the number of buckets UsageSeries will produce, so an
 // absurd range/bucket combination cannot allocate unbounded memory.
 const maxSeriesBuckets = 10000
@@ -218,12 +374,17 @@ const maxSeriesBuckets = 10000
 var ErrTooManyBuckets = errors.New("store: too many buckets")
 
 // SeriesPoint is one bucket of the usage timeseries: the bucket start (UTC) and
-// the cost/request/error totals for rows whose ts falls in that bucket.
+// the cost/request/error/token totals for rows whose ts falls in that bucket.
+// AvgLatencyMS is the mean latency over the bucket's rows (0 for an empty bucket).
 type SeriesPoint struct {
-	Bucket   time.Time
-	Cost     float64
-	Requests int
-	Errors   int
+	Bucket       time.Time
+	Cost         float64
+	Requests     int
+	Errors       int
+	InputTokens  float64
+	OutputTokens float64
+	CachedTokens float64
+	AvgLatencyMS float64
 }
 
 // UsageSeries returns cost/request/error totals grouped into fixed time buckets
@@ -261,7 +422,11 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 		`SELECT (ts / ?) * ? AS bucket_start,
 		        COALESCE(SUM(cost), 0),
 		        COUNT(*),
-		        SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END)
+		        SUM(CASE WHEN status = 0 OR status >= 400 THEN 1 ELSE 0 END),
+		        COALESCE(SUM(input_tokens), 0),
+		        COALESCE(SUM(output_tokens), 0),
+		        COALESCE(SUM(cached_tokens), 0),
+		        COALESCE(AVG(latency_ms), 0)
 		   FROM calls
 		  WHERE ts >= ? AND ts < ?
 		  GROUP BY bucket_start`,
@@ -273,9 +438,13 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 	defer rows.Close()
 
 	type agg struct {
-		cost     float64
-		requests int
-		errors   int
+		cost      float64
+		requests  int
+		errors    int
+		inTokens  float64
+		outTokens float64
+		cacheTok  float64
+		avgLat    float64
 	}
 	byBucket := make(map[int64]agg)
 	for rows.Next() {
@@ -283,7 +452,8 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 			bucketStart int64
 			a           agg
 		)
-		if err := rows.Scan(&bucketStart, &a.cost, &a.requests, &a.errors); err != nil {
+		if err := rows.Scan(&bucketStart, &a.cost, &a.requests, &a.errors,
+			&a.inTokens, &a.outTokens, &a.cacheTok, &a.avgLat); err != nil {
 			return nil, fmt.Errorf("store: scan usage series: %w", err)
 		}
 		byBucket[bucketStart] = a
@@ -300,6 +470,10 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 			p.Cost = a.cost
 			p.Requests = a.requests
 			p.Errors = a.errors
+			p.InputTokens = a.inTokens
+			p.OutputTokens = a.outTokens
+			p.CachedTokens = a.cacheTok
+			p.AvgLatencyMS = a.avgLat
 		}
 		out = append(out, p)
 	}

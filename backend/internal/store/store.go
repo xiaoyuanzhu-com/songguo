@@ -217,6 +217,12 @@ func (s *Store) migrate() error {
 	adds := []struct{ table, col, decl string }{
 		{"calls", "wire", "TEXT NOT NULL DEFAULT ''"},
 		{"calls", "confidence", "TEXT NOT NULL DEFAULT ''"},
+		// Normalized token counts (cross-vendor), persisted so token usage is
+		// queryable without parsing the heterogeneous raw `usage` JSON. Default 0;
+		// rows written before this column undercount until new traffic accrues.
+		{"calls", "input_tokens", "REAL NOT NULL DEFAULT 0"},
+		{"calls", "output_tokens", "REAL NOT NULL DEFAULT 0"},
+		{"calls", "cached_tokens", "REAL NOT NULL DEFAULT 0"},
 		{"providers", "allow_unmatched", "INTEGER NOT NULL DEFAULT 0"},
 		{"providers", "quirks", "TEXT NOT NULL DEFAULT '{}'"},
 		{"providers", "api_key", "TEXT NOT NULL DEFAULT ''"},

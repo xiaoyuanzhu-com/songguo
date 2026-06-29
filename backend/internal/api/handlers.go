@@ -132,6 +132,14 @@ func (a *api) overviewData(since, until time.Time) (overviewView, error) {
 	if err != nil {
 		return overviewView{}, err
 	}
+	tokens, err := a.store.TokenTotals(&since, &until)
+	if err != nil {
+		return overviewView{}, err
+	}
+	activeCallers, err := a.store.DistinctUsers(&since, &until)
+	if err != nil {
+		return overviewView{}, err
+	}
 
 	errorRate := 0.0
 	if stats.Requests > 0 {
@@ -192,12 +200,14 @@ func (a *api) overviewData(since, until time.Time) (overviewView, error) {
 		Range:           rangeView{Since: since.Unix(), Until: until.Unix()},
 		TotalSpend:      totalSpend,
 		SpendByModality: byMod,
+		Tokens:          tokenView{Input: tokens.Input, Output: tokens.Output, Cached: tokens.Cached},
 		Requests:        stats.Requests,
 		Errors:          stats.Errors,
 		ErrorRate:       errorRate,
 		LatencyMS:       latencyView{P50: stats.P50, P95: stats.P95, P99: stats.P99},
 		VendorsActive:   vendorsActive,
 		UsersActive:     usersActive,
+		ActiveCallers:   activeCallers,
 		DailyBurn:       dailyBurn,
 		RunwayDays:      runway,
 	}, nil
@@ -262,14 +272,90 @@ func (a *api) usageSeriesData(since, until time.Time, bucketRaw string) (usageSe
 	views := make([]seriesPoint, 0, len(points))
 	for _, p := range points {
 		views = append(views, seriesPoint{
-			TS:       p.Bucket.UTC().Format(time.RFC3339),
-			Cost:     p.Cost,
-			Requests: p.Requests,
-			Errors:   p.Errors,
+			TS:           p.Bucket.UTC().Format(time.RFC3339),
+			Cost:         p.Cost,
+			Requests:     p.Requests,
+			Errors:       p.Errors,
+			InputTokens:  p.InputTokens,
+			OutputTokens: p.OutputTokens,
+			CachedTokens: p.CachedTokens,
+			AvgLatencyMS: p.AvgLatencyMS,
 		})
 	}
 
 	return usageSeriesView{Bucket: label, Points: views}, nil
+}
+
+// handleBreakdown groups the call log by a dimension (model, vendor, user, or
+// modality) over a window (default last 30d) for the breakdown table and the
+// category bar charts.
+func (a *api) handleBreakdown(w http.ResponseWriter, r *http.Request) {
+	now := a.now().UTC()
+	since := now.AddDate(0, 0, -30)
+	until := now
+	if v, ok := parseUnixTime(r, "since"); ok {
+		since = *v
+	}
+	if v, ok := parseUnixTime(r, "until"); ok {
+		until = *v
+	}
+
+	dim := store.BreakdownDimension(r.URL.Query().Get("dimension"))
+	rows, err := a.store.Breakdown(dim, &since, &until)
+	if err != nil {
+		if errors.Is(err, store.ErrBadDimension) {
+			a.writeDataErr(w, "usage breakdown", badRequestErr("dimension must be model, vendor, user, or modality"))
+			return
+		}
+		a.writeDataErr(w, "usage breakdown", err)
+		return
+	}
+
+	views := make([]breakdownRow, 0, len(rows))
+	for _, b := range rows {
+		views = append(views, breakdownRow{
+			Key:          b.Key,
+			Requests:     b.Requests,
+			Errors:       b.Errors,
+			InputTokens:  b.InputTokens,
+			OutputTokens: b.OutputTokens,
+			CachedTokens: b.CachedTokens,
+			Cost:         b.Cost,
+			AvgLatencyMS: b.AvgLatencyMS,
+		})
+	}
+	writeJSON(w, http.StatusOK, breakdownView{
+		Range:     rangeView{Since: since.Unix(), Until: until.Unix()},
+		Dimension: string(dim),
+		Rows:      views,
+	})
+}
+
+// handleErrors returns error-row counts grouped by class (rate-limited, client,
+// server, transport) over a window (default last 30d) for the reliability section.
+func (a *api) handleErrors(w http.ResponseWriter, r *http.Request) {
+	now := a.now().UTC()
+	since := now.AddDate(0, 0, -30)
+	until := now
+	if v, ok := parseUnixTime(r, "since"); ok {
+		since = *v
+	}
+	if v, ok := parseUnixTime(r, "until"); ok {
+		until = *v
+	}
+
+	c, err := a.store.ErrorClassCounts(&since, &until)
+	if err != nil {
+		a.writeDataErr(w, "usage errors", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, errorsView{
+		Range:       rangeView{Since: since.Unix(), Until: until.Unix()},
+		RateLimited: c.RateLimited,
+		ClientError: c.ClientError,
+		ServerError: c.ServerError,
+		Transport:   c.Transport,
+	})
 }
 
 // handleCalls returns a filtered, paginated page of call entries plus the

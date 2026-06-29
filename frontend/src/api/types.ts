@@ -11,16 +11,26 @@ export interface LatencyMS {
   p99: number;
 }
 
+export interface TokenTotals {
+  input: number;
+  output: number;
+  /** Subset of input billed at the cached rate. */
+  cached: number;
+}
+
 export interface Overview {
   range: Range;
   total_spend: number;
   spend_by_modality: Record<string, number>;
+  tokens: TokenTotals;
   requests: number;
   errors: number;
   error_rate: number;
   latency_ms: LatencyMS;
   vendors_active: number;
   users_active: number;
+  /** Distinct users with traffic in the window. */
+  active_callers: number;
   daily_burn: number;
   runway_days: number | null;
 }
@@ -32,11 +42,42 @@ export interface SeriesPoint {
   cost: number;
   requests: number;
   errors: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  avg_latency_ms: number;
 }
 
 export interface UsageSeries {
   bucket: Bucket;
   points: SeriesPoint[];
+}
+
+export type BreakdownDimension = 'model' | 'vendor' | 'user' | 'modality';
+
+export interface BreakdownRow {
+  key: string;
+  requests: number;
+  errors: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
+  cost: number;
+  avg_latency_ms: number;
+}
+
+export interface Breakdown {
+  range: Range;
+  dimension: string;
+  rows: BreakdownRow[];
+}
+
+export interface ErrorBreakdown {
+  range: Range;
+  rate_limited: number;
+  client_error: number;
+  server_error: number;
+  transport: number;
 }
 
 export interface CallEntry {

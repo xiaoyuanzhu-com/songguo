@@ -33,29 +33,75 @@
   margin-top: 4px;
 }
 
-.kpiAmber {
-  background: var(--amber-weak);
-  border-color: color-mix(in srgb, var(--amber) 35%, var(--border));
-}
-.kpiAmber .kpiValue {
-  color: var(--amber);
-}
-
 .kpiDanger .kpiSub {
   color: var(--danger);
 }
 
-.row2 {
-  display: grid;
-  grid-template-columns: 2fr 1fr;
+/* ---- Section layout (redesigned overview) ---- */
+.sectionTitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
-  margin-bottom: 16px;
+  margin: 24px 0 12px;
+}
+
+.sectionName {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.sectionHint {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.grid3 {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 4px;
 }
 
 @media (max-width: 1040px) {
-  .row2 {
+  .grid3,
+  .grid2 {
     grid-template-columns: 1fr;
   }
+}
+
+.chartSm {
+  height: 200px;
+  width: 100%;
+}
+
+.chartXs {
+  height: 168px;
+  width: 100%;
+}
+
+.emptyChart {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.deferred {
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-style: italic;
 }
 
 .panel {
@@ -72,54 +118,6 @@
 .panelTitle {
   font-size: 13px;
   font-weight: 600;
-}
-
-.chartBox {
-  height: 240px;
-  width: 100%;
-}
-
-.modalityList {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.modalityRow {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.modalityTop {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  font-size: 13px;
-}
-
-.modalityName {
-  text-transform: capitalize;
-}
-
-.modalityCost {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  font-size: 12.5px;
-}
-
-.bar {
-  height: 7px;
-  border-radius: 4px;
-  background: var(--surface-2);
-  overflow: hidden;
-}
-
-.barFill {
-  height: 100%;
-  background: var(--accent);
-  border-radius: 4px;
-  transition: width 0.3s ease;
 }
 
 .latencyGroup {
@@ -252,25 +250,6 @@
 .pagerBtns {
   display: flex;
   gap: 8px;
-}
-
-.tooltip {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  box-shadow: var(--shadow);
-  padding: 8px 10px;
-  font-size: 12px;
-}
-
-.tooltipLabel {
-  color: var(--text-muted);
-  margin-bottom: 4px;
-}
-
-.tooltipRow {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
 }
 
 /* ---- Expandable call rows + trace panel ---- */

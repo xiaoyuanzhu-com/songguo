@@ -14,6 +14,14 @@
   --danger: #c0492f;
   --danger-weak: #fbeae6;
 
+  /* Categorical chart palette (pine-centric, distinguishable). Referenced by the
+     shadcn chart primitive via --color-chart-N in tailwind.css. */
+  --chart-1: #3f8f5b;
+  --chart-2: #2f7d92;
+  --chart-3: #b97e12;
+  --chart-4: #7a5ea8;
+  --chart-5: #bf6b4b;
+
   /* No "Inter" here on purpose: the API-reference page (Scalar) registers an
      Inter @font-face at runtime, and if Inter were a candidate the whole app's
      text would silently switch to it once that page is opened. */
@@ -44,6 +52,12 @@
   --amber-weak: #2a2212;
   --danger: #e0735a;
   --danger-weak: #2a1714;
+
+  --chart-1: #5ba873;
+  --chart-2: #4fa3bd;
+  --chart-3: #d9a441;
+  --chart-4: #a78bd0;
+  --chart-5: #d98a6a;
 
   --shadow: none;
 

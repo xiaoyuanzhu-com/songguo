@@ -2,19 +2,29 @@ import { useMemo, useState } from 'react';
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
+  Cell,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
   XAxis,
   YAxis,
-  type TooltipProps,
 } from 'recharts';
-import { AlertTriangle, DollarSign, Gauge, Server, Timer } from 'lucide-react';
+import { Activity, Coins, ShieldCheck, Users } from 'lucide-react';
 import { api } from '../api/client';
-import type { Bucket } from '../api/types';
+import type { Bucket, BreakdownRow } from '../api/types';
 import { ErrorBanner } from '../components/ErrorBanner';
 import { Page } from '../components/Layout';
 import { Skeleton } from '../components/Skeleton';
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from '../components/ui/chart';
 import { LIVE_REFRESH_MS, useFetch, useLiveTick } from '../lib/useFetch';
 import { bucketLabel, int, money, ms, percent } from '../lib/format';
 import { CallsTable } from './CallsTable';
@@ -34,40 +44,78 @@ const RANGES: RangeOption[] = [
 ];
 
 const REFRESH_MS = LIVE_REFRESH_MS;
+const TOP_N = 6;
+const CHART_CLS = 'aspect-auto h-full w-full';
+const PALETTE = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'];
+
+type FetchLike = { initialLoading: boolean; error: string | null; refetch: () => void };
 
 export function OverviewPage() {
   const [rangeKey, setRangeKey] = useState('24h');
-  // `tick` advances on the live refresh cadence so the window tracks "now".
+  const [bdDim, setBdDim] = useState<'model' | 'vendor' | 'user'>('model');
   const tick = useLiveTick(REFRESH_MS);
   const range = RANGES.find((r) => r.key === rangeKey) ?? RANGES[0];
 
   const { since, until } = useMemo(() => {
-    // `until` gets a +1s buffer so a call made in the current second isn't
-    // excluded by the backend's half-open [since, until) window.
     const u = tick + 1;
     return { since: u - range.seconds, until: u };
   }, [tick, range]);
 
-  const overview = useFetch(() => api.overview(since, until), [since, until], {
-    intervalMs: REFRESH_MS,
-  });
+  const opts = { intervalMs: REFRESH_MS };
+  const overview = useFetch(() => api.overview(since, until), [since, until], opts);
   const series = useFetch(
     () => api.series(since, until, range.bucket),
     [since, until, range.bucket],
-    { intervalMs: REFRESH_MS },
+    opts,
   );
+  const byModel = useFetch(() => api.breakdown('model', since, until), [since, until], opts);
+  const byVendor = useFetch(() => api.breakdown('vendor', since, until), [since, until], opts);
+  const byUser = useFetch(() => api.breakdown('user', since, until), [since, until], opts);
+  const byModality = useFetch(() => api.breakdown('modality', since, until), [since, until], opts);
+  const errs = useFetch(() => api.errors(since, until), [since, until], opts);
 
   const ov = overview.data;
-  const runwayAmber = ov?.runway_days != null && ov.runway_days < 14;
-  const errorElevated = ov != null && ov.error_rate > 0.05;
 
-  const modalityEntries = useMemo(() => {
-    if (!ov) return [];
-    const entries = Object.entries(ov.spend_by_modality);
-    entries.sort((a, b) => b[1] - a[1]);
-    return entries;
-  }, [ov]);
-  const modalityMax = modalityEntries.reduce((m, [, v]) => Math.max(m, v), 0);
+  // Time-series rows with derived ratios for the charts.
+  const points = useMemo(() => {
+    const pts = series.data?.points ?? [];
+    const bucket = series.data?.bucket ?? range.bucket;
+    return pts.map((p) => ({
+      label: bucketLabel(p.ts, bucket),
+      requests: p.requests,
+      errors: p.errors,
+      cost: p.cost,
+      input_tokens: p.input_tokens,
+      output_tokens: p.output_tokens,
+      avg_latency_ms: p.avg_latency_ms,
+      success: p.requests > 0 ? ((p.requests - p.errors) / p.requests) * 100 : null,
+      cache_hit: p.input_tokens > 0 ? (p.cached_tokens / p.input_tokens) * 100 : null,
+    }));
+  }, [series.data, range.bucket]);
+  const seriesEmpty = points.length === 0;
+
+  const models = (byModel.data?.rows ?? []).slice(0, TOP_N);
+  const vendors = (byVendor.data?.rows ?? []).slice(0, TOP_N);
+  const modalities = byModality.data?.rows ?? [];
+  const bdRows =
+    bdDim === 'model'
+      ? byModel.data?.rows
+      : bdDim === 'vendor'
+        ? byVendor.data?.rows
+        : byUser.data?.rows;
+  const bdResult = bdDim === 'model' ? byModel : bdDim === 'vendor' ? byVendor : byUser;
+
+  const errorClasses = useMemo(() => {
+    const e = errs.data;
+    if (!e) return [];
+    return [
+      { name: '429', value: e.rate_limited, fill: 'var(--chart-3)' },
+      { name: '4xx', value: e.client_error, fill: 'var(--chart-5)' },
+      { name: '5xx', value: e.server_error, fill: 'var(--danger)' },
+      { name: 'transport', value: e.transport, fill: 'var(--chart-4)' },
+    ];
+  }, [errs.data]);
+  const errorsEmpty = errorClasses.every((c) => c.value === 0);
 
   const rangeSwitch = (
     <div className={styles.seg} role="tablist" aria-label="Time range">
@@ -96,126 +144,272 @@ export function OverviewPage() {
       {/* KPI cards */}
       <div className={styles.kpiGrid}>
         <Kpi
-          icon={<DollarSign size={14} />}
-          label={`Total spend (${range.label})`}
-          loading={overview.initialLoading}
-          value={ov ? money(ov.total_spend) : '—'}
-        />
-        <Kpi
-          icon={<Gauge size={14} />}
-          label="Budget runway"
-          loading={overview.initialLoading}
-          amber={runwayAmber}
-          value={
-            ov?.runway_days != null ? `≈ ${Math.round(ov.runway_days)} days` : '—'
-          }
-          sub={ov ? `${money(ov.daily_burn)} / day` : undefined}
-        />
-        <Kpi
-          icon={<Server size={14} />}
-          label="Active vendors"
-          loading={overview.initialLoading}
-          value={ov ? int(ov.vendors_active) : '—'}
-          sub={ov ? `${int(ov.users_active)} users` : undefined}
-        />
-        <Kpi
-          icon={<AlertTriangle size={14} />}
-          label="Requests"
+          icon={<Activity size={14} />}
+          label={`Requests (${range.label})`}
           loading={overview.initialLoading}
           value={ov ? int(ov.requests) : '—'}
-          danger={errorElevated}
-          sub={ov ? `${percent(ov.error_rate)} errors` : undefined}
+          sub={ov ? `${int(ov.errors)} failed` : undefined}
         />
         <Kpi
-          icon={<Timer size={14} />}
-          label="p95 latency"
+          icon={<Coins size={14} />}
+          label="Tokens"
           loading={overview.initialLoading}
-          value={ov ? ms(ov.latency_ms.p95) : '—'}
+          value={ov ? int(ov.tokens.input + ov.tokens.output) : '—'}
+          sub={ov ? `${int(ov.tokens.input)} in · ${int(ov.tokens.output)} out` : undefined}
+        />
+        <Kpi
+          icon={<Users size={14} />}
+          label="Active users"
+          loading={overview.initialLoading}
+          value={ov ? int(ov.active_callers) : '—'}
+          sub={ov ? `${int(ov.users_active)} provisioned` : undefined}
+        />
+        <Kpi
+          icon={<ShieldCheck size={14} />}
+          label="Success rate"
+          loading={overview.initialLoading}
+          value={ov ? percent(1 - ov.error_rate) : '—'}
+          danger={ov != null && ov.error_rate > 0.05}
+          sub={ov ? `${percent(ov.error_rate)} errors` : undefined}
         />
       </div>
 
-      {/* Chart + modality */}
-      <div className={styles.row2}>
-        <div className={`card ${styles.panel}`}>
-          <div className={styles.panelHead}>
-            <span className={styles.panelTitle}>Spend over time</span>
-          </div>
-          <div className={styles.chartBox}>
-            {series.initialLoading ? (
-              <Skeleton height="100%" radius={6} />
-            ) : series.error ? (
-              <ErrorBanner message={series.error} onRetry={series.refetch} />
-            ) : (
-              <SpendChart
-                points={series.data?.points ?? []}
-                bucket={series.data?.bucket ?? range.bucket}
-              />
-            )}
-          </div>
-        </div>
+      {/* Traffic */}
+      <SectionTitle name="Traffic" />
+      <div className={styles.grid3}>
+        <Panel title="Requests over time">
+          <Frame r={series} height={styles.chartSm} empty={seriesEmpty}>
+            <ChartContainer config={{ requests: { label: 'Requests', color: 'var(--chart-1)' } }} className={CHART_CLS}>
+              <AreaChart data={points} margin={{ top: 6, right: 8, left: -12, bottom: 0 }}>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
+                <YAxis tickLine={false} axisLine={false} width={40} allowDecimals={false} />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Area dataKey="requests" type="monotone" stroke="var(--color-requests)" fill="var(--color-requests)" fillOpacity={0.15} strokeWidth={2} />
+              </AreaChart>
+            </ChartContainer>
+          </Frame>
+        </Panel>
+        <Panel title="Top models">
+          <Frame r={byModel} height={styles.chartSm} empty={models.length === 0}>
+            <CategoryBars rows={models} dataKey="requests" label="Requests" color="var(--chart-1)" fmt={int} />
+          </Frame>
+        </Panel>
+        <Panel title="By vendor">
+          <Frame r={byVendor} height={styles.chartSm} empty={vendors.length === 0}>
+            <ChartContainer config={{}} className={CHART_CLS}>
+              <PieChart>
+                <ChartTooltip content={<ChartTooltipContent nameKey="key" />} />
+                <Pie data={vendors} dataKey="requests" nameKey="key" innerRadius={42} outerRadius={68} strokeWidth={2} stroke="var(--surface)">
+                  {vendors.map((_, i) => (
+                    <Cell key={i} fill={PALETTE[i % PALETTE.length]} />
+                  ))}
+                </Pie>
+              </PieChart>
+            </ChartContainer>
+          </Frame>
+        </Panel>
+      </div>
 
-        <div className={`card ${styles.panel}`}>
-          <div className={styles.panelHead}>
-            <span className={styles.panelTitle}>Spend by modality</span>
-          </div>
+      {/* Tokens */}
+      <SectionTitle name="Tokens" hint="LLM usage — input, output, and cache hits" />
+      <div className={styles.grid3}>
+        <Panel title="Token throughput">
+          <Frame r={series} height={styles.chartSm} empty={seriesEmpty}>
+            <ChartContainer
+              config={{
+                input_tokens: { label: 'Input', color: 'var(--chart-1)' },
+                output_tokens: { label: 'Output', color: 'var(--chart-2)' },
+              }}
+              className={CHART_CLS}
+            >
+              <AreaChart data={points} margin={{ top: 6, right: 8, left: -4, bottom: 0 }}>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
+                <YAxis tickLine={false} axisLine={false} width={48} tickFormatter={(v: number) => compact(v)} />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Area dataKey="input_tokens" stackId="t" type="monotone" stroke="var(--color-input_tokens)" fill="var(--color-input_tokens)" fillOpacity={0.18} strokeWidth={2} />
+                <Area dataKey="output_tokens" stackId="t" type="monotone" stroke="var(--color-output_tokens)" fill="var(--color-output_tokens)" fillOpacity={0.18} strokeWidth={2} />
+              </AreaChart>
+            </ChartContainer>
+          </Frame>
+        </Panel>
+        <Panel title="Cache-hit ratio">
+          <Frame r={series} height={styles.chartSm} empty={seriesEmpty}>
+            <ChartContainer config={{ cache_hit: { label: 'Cache hit', color: 'var(--chart-3)' } }} className={CHART_CLS}>
+              <LineChart data={points} margin={{ top: 6, right: 8, left: -16, bottom: 0 }}>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
+                <YAxis tickLine={false} axisLine={false} width={40} domain={[0, 100]} tickFormatter={(v: number) => `${v}%`} />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Line dataKey="cache_hit" type="monotone" stroke="var(--color-cache_hit)" strokeWidth={2} dot={false} connectNulls />
+              </LineChart>
+            </ChartContainer>
+          </Frame>
+        </Panel>
+        <Panel title="Tokens by model">
+          <Frame r={byModel} height={styles.chartSm} empty={models.length === 0}>
+            <ChartContainer
+              config={{
+                input_tokens: { label: 'Input', color: 'var(--chart-1)' },
+                output_tokens: { label: 'Output', color: 'var(--chart-2)' },
+              }}
+              className={CHART_CLS}
+            >
+              <BarChart data={models} layout="vertical" margin={{ top: 2, right: 12, left: 2, bottom: 2 }}>
+                <XAxis type="number" hide tickFormatter={(v: number) => compact(v)} />
+                <YAxis type="category" dataKey="key" width={104} tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Bar dataKey="input_tokens" stackId="t" fill="var(--color-input_tokens)" radius={[3, 0, 0, 3]} />
+                <Bar dataKey="output_tokens" stackId="t" fill="var(--color-output_tokens)" radius={[0, 3, 3, 0]} />
+              </BarChart>
+            </ChartContainer>
+          </Frame>
+        </Panel>
+      </div>
+
+      {/* Performance */}
+      <SectionTitle name="Performance" hint="End-to-end latency" />
+      <div className={styles.grid2}>
+        <Panel title="Latency percentiles">
           {overview.initialLoading ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {Array.from({ length: 3 }).map((_, i) => (
-                <Skeleton key={i} height={28} />
-              ))}
-            </div>
-          ) : modalityEntries.length === 0 ? (
-            <div className="muted" style={{ fontSize: 13 }}>
-              No spend in this range.
-            </div>
+            <Skeleton height={64} />
           ) : (
-            <div className={styles.modalityList}>
-              {modalityEntries.map(([name, cost]) => (
-                <div key={name} className={styles.modalityRow}>
-                  <div className={styles.modalityTop}>
-                    <span className={styles.modalityName}>{name}</span>
-                    <span className={styles.modalityCost}>{money(cost)}</span>
-                  </div>
-                  <div className={styles.bar}>
-                    <div
-                      className={styles.barFill}
-                      style={{
-                        width: modalityMax > 0 ? `${(cost / modalityMax) * 100}%` : '0%',
-                      }}
-                    />
-                  </div>
+            <div className={styles.latencyGroup} style={{ marginTop: 4 }}>
+              {(['p50', 'p95', 'p99'] as const).map((p) => (
+                <div key={p} className={styles.latencyStat}>
+                  <span className={styles.latencyLabel}>{p}</span>
+                  <span className={styles.latencyValue}>{ov ? ms(ov.latency_ms[p]) : '—'}</span>
                 </div>
               ))}
             </div>
           )}
-
-          <div
-            style={{
-              marginTop: 18,
-              paddingTop: 16,
-              borderTop: '1px solid var(--border)',
-            }}
-          >
-            <span className={styles.panelTitle}>Latency</span>
-            <div className={styles.latencyGroup} style={{ marginTop: 12 }}>
-              {(['p50', 'p95', 'p99'] as const).map((p) => (
-                <div key={p} className={styles.latencyStat}>
-                  <span className={styles.latencyLabel}>{p}</span>
-                  <span className={styles.latencyValue}>
-                    {ov ? ms(ov.latency_ms[p]) : '—'}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+          <div className={styles.deferred}>TTFT &amp; tokens/sec coming once streaming is instrumented.</div>
+        </Panel>
+        <Panel title="Avg latency over time">
+          <Frame r={series} height={styles.chartXs} empty={seriesEmpty}>
+            <ChartContainer config={{ avg_latency_ms: { label: 'Avg latency', color: 'var(--chart-4)' } }} className={CHART_CLS}>
+              <LineChart data={points} margin={{ top: 6, right: 8, left: -8, bottom: 0 }}>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
+                <YAxis tickLine={false} axisLine={false} width={48} tickFormatter={(v: number) => `${Math.round(v)}`} />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Line dataKey="avg_latency_ms" type="monotone" stroke="var(--color-avg_latency_ms)" strokeWidth={2} dot={false} />
+              </LineChart>
+            </ChartContainer>
+          </Frame>
+        </Panel>
       </div>
 
-      {/* Recent calls */}
+      {/* Reliability */}
+      <SectionTitle name="Reliability" />
+      <div className={styles.grid3}>
+        <Panel title="Success rate over time">
+          <Frame r={series} height={styles.chartSm} empty={seriesEmpty}>
+            <ChartContainer config={{ success: { label: 'Success', color: 'var(--chart-1)' } }} className={CHART_CLS}>
+              <LineChart data={points} margin={{ top: 6, right: 8, left: -16, bottom: 0 }}>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
+                <YAxis tickLine={false} axisLine={false} width={40} domain={[0, 100]} tickFormatter={(v: number) => `${v}%`} />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Line dataKey="success" type="monotone" stroke="var(--color-success)" strokeWidth={2} dot={false} connectNulls />
+              </LineChart>
+            </ChartContainer>
+          </Frame>
+        </Panel>
+        <Panel title="Errors by class">
+          <Frame r={errs} height={styles.chartSm} empty={errorsEmpty}>
+            <ChartContainer config={{}} className={CHART_CLS}>
+              <BarChart data={errorClasses} layout="vertical" margin={{ top: 2, right: 12, left: 2, bottom: 2 }}>
+                <XAxis type="number" hide allowDecimals={false} />
+                <YAxis type="category" dataKey="name" width={72} tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
+                <ChartTooltip content={<ChartTooltipContent nameKey="name" hideLabel />} />
+                <Bar dataKey="value" radius={3}>
+                  {errorClasses.map((c) => (
+                    <Cell key={c.name} fill={c.fill} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ChartContainer>
+          </Frame>
+        </Panel>
+        <Panel title="Error rate by vendor">
+          <Frame r={byVendor} height={styles.chartSm} empty={vendors.length === 0}>
+            <CategoryBars
+              rows={vendors.map((v) => ({ ...v, err_rate: v.requests > 0 ? (v.errors / v.requests) * 100 : 0 }))}
+              dataKey="err_rate"
+              label="Error rate"
+              color="var(--chart-5)"
+              fmt={(v) => `${v.toFixed(1)}%`}
+            />
+          </Frame>
+        </Panel>
+      </div>
+
+      {/* Cost */}
+      <SectionTitle name="Cost" />
+      <div className={styles.grid2}>
+        <Panel title="Spend over time">
+          <Frame r={series} height={styles.chartXs} empty={seriesEmpty}>
+            <ChartContainer config={{ cost: { label: 'Spend', color: 'var(--chart-1)' } }} className={CHART_CLS}>
+              <AreaChart data={points} margin={{ top: 6, right: 8, left: -4, bottom: 0 }}>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
+                <YAxis tickLine={false} axisLine={false} width={52} tickFormatter={(v: number) => money(v)} />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Area dataKey="cost" type="monotone" stroke="var(--color-cost)" fill="var(--color-cost)" fillOpacity={0.15} strokeWidth={2} />
+              </AreaChart>
+            </ChartContainer>
+          </Frame>
+        </Panel>
+        <Panel title="Spend by model">
+          <Frame r={byModel} height={styles.chartXs} empty={models.length === 0}>
+            <CategoryBars rows={models} dataKey="cost" label="Spend" color="var(--chart-1)" fmt={money} />
+          </Frame>
+        </Panel>
+      </div>
+
+      {/* Modality mix — the multi-task view */}
+      <SectionTitle name="Modality mix" hint="All tasks served by the proxy" />
+      <div className={`card ${styles.panel}`}>
+        <Frame r={byModality} height="" empty={modalities.length === 0}>
+          <BreakdownTable rows={modalities} keyLabel="Modality" capitalize />
+        </Frame>
+      </div>
+
+      {/* Breakdown table */}
+      <SectionTitle
+        name="Breakdown"
+        control={
+          <div className={styles.seg} role="tablist" aria-label="Breakdown dimension">
+            {(['model', 'vendor', 'user'] as const).map((d) => (
+              <button
+                key={d}
+                role="tab"
+                aria-selected={d === bdDim}
+                className={`${styles.segBtn} ${d === bdDim ? styles.segActive : ''}`}
+                onClick={() => setBdDim(d)}
+              >
+                {d[0].toUpperCase() + d.slice(1)}
+              </button>
+            ))}
+          </div>
+        }
+      />
+      <div className={`card ${styles.panel}`}>
+        <Frame r={bdResult} height="" empty={(bdRows?.length ?? 0) === 0}>
+          <BreakdownTable rows={bdRows ?? []} keyLabel={bdDim[0].toUpperCase() + bdDim.slice(1)} />
+        </Frame>
+      </div>
+
+      {/* Recent requests */}
+      <SectionTitle name="Recent requests" />
       <CallsTable since={since} until={until} />
     </Page>
   );
 }
+
+// ---- Building blocks ----
 
 interface KpiProps {
   icon: React.ReactNode;
@@ -223,93 +417,139 @@ interface KpiProps {
   value: string;
   sub?: string;
   loading?: boolean;
-  amber?: boolean;
   danger?: boolean;
 }
 
-function Kpi({ icon, label, value, sub, loading, amber, danger }: KpiProps) {
+function Kpi({ icon, label, value, sub, loading, danger }: KpiProps) {
   return (
-    <div
-      className={`card ${styles.kpi} ${amber ? styles.kpiAmber : ''} ${
-        danger ? styles.kpiDanger : ''
-      }`}
-    >
+    <div className={`card ${styles.kpi} ${danger ? styles.kpiDanger : ''}`}>
       <div className={styles.kpiLabel}>
         {icon}
         {label}
       </div>
-      {loading ? (
-        <Skeleton width={90} height={26} />
-      ) : (
-        <div className={styles.kpiValue}>{value}</div>
-      )}
+      {loading ? <Skeleton width={90} height={26} /> : <div className={styles.kpiValue}>{value}</div>}
       {sub && !loading ? <div className={styles.kpiSub}>{sub}</div> : null}
     </div>
   );
 }
 
-function SpendChart({
-  points,
-  bucket,
-}: {
-  points: { ts: string; cost: number; requests: number }[];
-  bucket: Bucket;
-}) {
-  const data = points.map((p) => ({
-    label: bucketLabel(p.ts, bucket),
-    cost: p.cost,
-    requests: p.requests,
-  }));
-
+function SectionTitle({ name, hint, control }: { name: string; hint?: string; control?: React.ReactNode }) {
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <AreaChart data={data} margin={{ top: 6, right: 8, bottom: 0, left: -8 }}>
-        <defs>
-          <linearGradient id="spendFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.22} />
-            <stop offset="100%" stopColor="var(--accent)" stopOpacity={0.02} />
-          </linearGradient>
-        </defs>
-        <CartesianGrid stroke="var(--border)" vertical={false} />
-        <XAxis
-          dataKey="label"
-          tick={{ fill: 'var(--text-muted)', fontSize: 11 }}
-          tickLine={false}
-          axisLine={{ stroke: 'var(--border)' }}
-          minTickGap={28}
-        />
-        <YAxis
-          tick={{ fill: 'var(--text-muted)', fontSize: 11 }}
-          tickLine={false}
-          axisLine={false}
-          width={56}
-          tickFormatter={(v: number) => money(v)}
-        />
-        <Tooltip content={<SpendTooltip />} cursor={{ stroke: 'var(--border)' }} />
-        <Area
-          type="monotone"
-          dataKey="cost"
-          stroke="var(--accent)"
-          strokeWidth={2}
-          fill="url(#spendFill)"
-          dot={false}
-          activeDot={{ r: 3, fill: 'var(--accent)' }}
-        />
-      </AreaChart>
-    </ResponsiveContainer>
+    <div className={styles.sectionTitle}>
+      <span className={styles.sectionName}>{name}</span>
+      {control ?? (hint ? <span className={styles.sectionHint}>{hint}</span> : null)}
+    </div>
   );
 }
 
-function SpendTooltip({ active, payload, label }: TooltipProps<number, string>) {
-  if (!active || !payload || payload.length === 0) return null;
-  const point = payload[0].payload as { cost: number; requests: number };
+function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className={styles.tooltip}>
-      <div className={styles.tooltipLabel}>{label}</div>
-      <div className={styles.tooltipRow}>{money(point.cost)}</div>
-      <div className={styles.tooltipRow} style={{ color: 'var(--text-muted)' }}>
-        {int(point.requests)} requests
+    <div className={`card ${styles.panel}`}>
+      <div className={styles.panelHead}>
+        <span className={styles.panelTitle}>{title}</span>
       </div>
+      {children}
     </div>
   );
+}
+
+/** Renders skeleton / error / empty / chart for a useFetch-backed panel body. */
+function Frame({
+  r,
+  height,
+  empty,
+  children,
+}: {
+  r: FetchLike;
+  height: string;
+  empty: boolean;
+  children: React.ReactNode;
+}) {
+  const inner = r.initialLoading ? (
+    <Skeleton height={height ? '100%' : 80} radius={6} />
+  ) : r.error ? (
+    <ErrorBanner message={r.error} onRetry={r.refetch} />
+  ) : empty ? (
+    <div className={styles.emptyChart}>No data in this range.</div>
+  ) : (
+    children
+  );
+  return height ? <div className={height}>{inner}</div> : <>{inner}</>;
+}
+
+/** Horizontal bar chart over breakdown rows (single metric), keyed by `.key`. */
+function CategoryBars<T extends { key: string }>({
+  rows,
+  dataKey,
+  label,
+  color,
+  fmt,
+}: {
+  rows: T[];
+  dataKey: string;
+  label: string;
+  color: string;
+  fmt: (n: number) => string;
+}) {
+  const config: ChartConfig = { [dataKey]: { label, color } };
+  return (
+    <ChartContainer config={config} className={CHART_CLS}>
+      <BarChart data={rows} layout="vertical" margin={{ top: 2, right: 14, left: 2, bottom: 2 }}>
+        <XAxis type="number" hide tickFormatter={fmt} />
+        <YAxis type="category" dataKey="key" width={104} tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
+        <ChartTooltip content={<ChartTooltipContent />} />
+        <Bar dataKey={dataKey} fill={`var(--color-${dataKey})`} radius={3} />
+      </BarChart>
+    </ChartContainer>
+  );
+}
+
+/** Tabular breakdown: requests, success %, avg latency, tokens, spend. */
+function BreakdownTable({
+  rows,
+  keyLabel,
+  capitalize,
+}: {
+  rows: BreakdownRow[];
+  keyLabel: string;
+  capitalize?: boolean;
+}) {
+  return (
+    <div className={styles.tableScroll}>
+      <table className="table">
+        <thead>
+          <tr>
+            <th>{keyLabel}</th>
+            <th className="num">Requests</th>
+            <th className="num">Success</th>
+            <th className="num">Avg latency</th>
+            <th className="num">Tokens</th>
+            <th className="num">Spend</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const success = r.requests > 0 ? (r.requests - r.errors) / r.requests : 1;
+            return (
+              <tr key={r.key}>
+                <td style={capitalize ? { textTransform: 'capitalize' } : undefined}>{r.key || '—'}</td>
+                <td className="num">{int(r.requests)}</td>
+                <td className="num">{percent(success)}</td>
+                <td className="num">{ms(r.avg_latency_ms)}</td>
+                <td className="num">{int(r.input_tokens + r.output_tokens)}</td>
+                <td className="num">{money(r.cost)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Compact large numbers for axis ticks, e.g. 12.3k, 4.5M. */
+function compact(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return `${Math.round(n)}`;
 }

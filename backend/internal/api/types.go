@@ -122,33 +122,76 @@ type latencyView struct {
 	P99 int64 `json:"p99"`
 }
 
+// tokenView holds summed normalized token counts over a window.
+type tokenView struct {
+	Input  float64 `json:"input"`
+	Output float64 `json:"output"`
+	Cached float64 `json:"cached"`
+}
+
 // overviewView is the GET /api/overview response.
 type overviewView struct {
 	Range           rangeView          `json:"range"`
 	TotalSpend      float64            `json:"total_spend"`
 	SpendByModality map[string]float64 `json:"spend_by_modality"`
+	Tokens          tokenView          `json:"tokens"`
 	Requests        int                `json:"requests"`
 	Errors          int                `json:"errors"`
 	ErrorRate       float64            `json:"error_rate"`
 	LatencyMS       latencyView        `json:"latency_ms"`
 	VendorsActive   int                `json:"vendors_active"`
 	UsersActive     int                `json:"users_active"`
-	DailyBurn       float64            `json:"daily_burn"`
-	RunwayDays      *float64           `json:"runway_days"`
+	// ActiveCallers is the count of distinct users with traffic in the window,
+	// as opposed to UsersActive (non-revoked users in config).
+	ActiveCallers int      `json:"active_callers"`
+	DailyBurn     float64  `json:"daily_burn"`
+	RunwayDays    *float64 `json:"runway_days"`
 }
 
 // seriesPoint is one bucket in the GET /api/usage/series response.
 type seriesPoint struct {
-	TS       string  `json:"ts"`
-	Cost     float64 `json:"cost"`
-	Requests int     `json:"requests"`
-	Errors   int     `json:"errors"`
+	TS           string  `json:"ts"`
+	Cost         float64 `json:"cost"`
+	Requests     int     `json:"requests"`
+	Errors       int     `json:"errors"`
+	InputTokens  float64 `json:"input_tokens"`
+	OutputTokens float64 `json:"output_tokens"`
+	CachedTokens float64 `json:"cached_tokens"`
+	AvgLatencyMS float64 `json:"avg_latency_ms"`
 }
 
 // usageSeriesView is the GET /api/usage/series response.
 type usageSeriesView struct {
 	Bucket string        `json:"bucket"`
 	Points []seriesPoint `json:"points"`
+}
+
+// breakdownRow is one group's aggregates in the GET /api/usage/breakdown response.
+type breakdownRow struct {
+	Key          string  `json:"key"`
+	Requests     int     `json:"requests"`
+	Errors       int     `json:"errors"`
+	InputTokens  float64 `json:"input_tokens"`
+	OutputTokens float64 `json:"output_tokens"`
+	CachedTokens float64 `json:"cached_tokens"`
+	Cost         float64 `json:"cost"`
+	AvgLatencyMS float64 `json:"avg_latency_ms"`
+}
+
+// breakdownView is the GET /api/usage/breakdown response.
+type breakdownView struct {
+	Range     rangeView      `json:"range"`
+	Dimension string         `json:"dimension"`
+	Rows      []breakdownRow `json:"rows"`
+}
+
+// errorsView is the GET /api/usage/errors response: error-row counts by class.
+type errorsView struct {
+	Range       rangeView `json:"range"`
+	RateLimited int       `json:"rate_limited"`
+	ClientError int       `json:"client_error"`
+	ServerError int       `json:"server_error"`
+	Transport   int       `json:"transport"`
 }
 
 // callsView is the GET /api/calls response.
