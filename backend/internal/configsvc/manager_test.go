@@ -1,9 +1,11 @@
 package configsvc
 
 import (
+	"bytes"
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/songguo/songguo/internal/store"
@@ -86,6 +88,48 @@ func TestManagerSkipsIncompleteProviders(t *testing.T) {
 	}
 	if got := len(m.Current().Vendors()); got != 2 {
 		t.Fatalf("after completing draft, vendors = %d, want 2", got)
+	}
+}
+
+// A model that would silently meter $0 — a zero rate or an unrecognized unit —
+// is warned about (not blocked); a well-formed price stays silent. The provider
+// still routes regardless.
+func TestManagerWarnsOnUnpriceableModels(t *testing.T) {
+	st := openTestStore(t)
+
+	if _, err := st.CreateProvider(store.NewProvider{
+		Name: "warnme", Enabled: true, APIKey: "sk-z",
+		Models: []store.ProviderModel{
+			{Model: "free-model", Input: 0, Output: 0, Unit: "per_1m_tokens"}, // zero rate
+			{Model: "typo-model", Input: 1, Output: 2, Unit: "per_1m_token"},  // unknown unit (missing s)
+			{Model: "ok-model", Input: 1, Output: 2, Unit: "per_1m_tokens"},   // fine
+		},
+		Endpoints: []store.ProviderEndpoint{{Wire: "openai/chat", Endpoint: "https://api.openai.com/v1/chat/completions", Adapter: "openai-compatible"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	m, err := NewManager(st, logger)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	// Warnings are non-fatal: the provider still routes.
+	if _, ok := m.Current().Vendor("warnme"); !ok {
+		t.Fatal("provider with price warnings must still route")
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "free-model") || !strings.Contains(out, "price is zero") {
+		t.Errorf("expected zero-price warning for free-model; logs:\n%s", out)
+	}
+	if !strings.Contains(out, "typo-model") || !strings.Contains(out, "unit not recognized") {
+		t.Errorf("expected unknown-unit warning for typo-model; logs:\n%s", out)
+	}
+	if strings.Contains(out, "ok-model") {
+		t.Errorf("well-priced ok-model should not warn; logs:\n%s", out)
 	}
 }
 

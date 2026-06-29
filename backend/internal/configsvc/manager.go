@@ -114,7 +114,20 @@ func vendorsFromProvider(pvd store.Provider, logger *slog.Logger) []config.Vendo
 		if unit == "" {
 			unit = "per_1m_tokens"
 		}
-		prices[m.Model] = config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: unit}
+		p := config.Price{Input: m.Input, Output: m.Output, CachedInput: m.CachedInput, Unit: unit}
+		prices[m.Model] = p
+
+		// Price-completeness warnings (non-fatal): both cases silently meter calls
+		// as $0, which looks identical to "free" in the ledger. Warn, don't block —
+		// a half-priced provider must still route.
+		switch {
+		case !config.KnownPriceUnits[unit]:
+			logger.Warn("price unit not recognized; calls for this model will meter as $0",
+				"provider", pvd.Name, "model", m.Model, "unit", unit)
+		case config.PriceMetersZero(p):
+			logger.Warn("price is zero; calls for this model will meter as $0",
+				"provider", pvd.Name, "model", m.Model, "unit", unit)
+		}
 	}
 
 	// Group endpoints by (origin, adapter): a group shares a credential, auth

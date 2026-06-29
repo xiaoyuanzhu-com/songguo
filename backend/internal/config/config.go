@@ -36,6 +36,31 @@ type Price struct {
 	Unit        string  `yaml:"unit"` // e.g. per_1m_tokens, per_1k_tokens, per_token, per_call, per_image, per_second, per_char
 }
 
+// KnownPriceUnits is the set of pricing units the cost engine understands (see
+// internal/pricing.Cost). Any other unit silently meters as $0, so config
+// assembly warns when a price uses one outside this set.
+var KnownPriceUnits = map[string]bool{
+	"per_1m_tokens": true,
+	"per_1k_tokens": true,
+	"per_token":     true,
+	"per_call":      true,
+	"per_image":     true,
+	"per_second":    true,
+	"per_char":      true,
+}
+
+// PriceMetersZero reports whether a price would always compute $0 cost: a
+// token-rate price with both input and output non-positive, or a single-rate
+// (per_call/per_image/per_second/per_char) price with a non-positive input.
+func PriceMetersZero(p Price) bool {
+	switch p.Unit {
+	case "per_1m_tokens", "per_1k_tokens", "per_token":
+		return p.Input <= 0 && p.Output <= 0
+	default:
+		return p.Input <= 0
+	}
+}
+
 // Adapter names the auth scheme a vendor expects (header style applied when
 // the proxy swaps in the credential).
 const (
