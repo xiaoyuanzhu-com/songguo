@@ -68,6 +68,22 @@
   color: var(--accent);
 }
 
+.navGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 12px;
+}
+
+.navGroupLabel {
+  padding: 4px 10px 2px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
 .main {
   flex: 1;
   min-width: 0;
@@ -154,6 +170,15 @@
     width: 36px;
     justify-content: center;
     padding: 0;
+  }
+
+  /* The Docs group flattens into the icon row; its caption is dropped. */
+  .navGroup {
+    display: contents;
+  }
+
+  .navGroupLabel {
+    display: none;
   }
 
   .toolbar {

@@ -1,6 +1,6 @@
 import { Suspense, type ReactNode } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
-import { Activity, Layers, Plug, Settings, Users } from 'lucide-react';
+import { Activity, Boxes, Braces, Layers, Plug, Rocket, Settings, Users } from 'lucide-react';
 import styles from './Layout.module.css';
 
 const NAV = [
@@ -10,6 +10,15 @@ const NAV = [
   { to: '/users', label: 'Users', icon: Users, end: false },
   { to: '/settings', label: 'Settings', icon: Settings, end: false },
 ] as const;
+
+const DOCS_NAV = [
+  { to: '/docs/quickstart', label: 'Quickstart', icon: Rocket },
+  { to: '/docs/api', label: 'API', icon: Braces },
+  { to: '/docs/mcp', label: 'MCP', icon: Boxes },
+] as const;
+
+const navItemClass = ({ isActive }: { isActive: boolean }) =>
+  isActive ? `${styles.navItem} ${styles.navItemActive}` : styles.navItem;
 
 export function Layout() {
   return (
@@ -21,18 +30,20 @@ export function Layout() {
         </div>
         <nav className={styles.nav}>
           {NAV.map(({ to, label, icon: Icon, end }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={end}
-              className={({ isActive }) =>
-                isActive ? `${styles.navItem} ${styles.navItemActive}` : styles.navItem
-              }
-            >
+            <NavLink key={to} to={to} end={end} className={navItemClass}>
               <Icon size={16} />
               <span>{label}</span>
             </NavLink>
           ))}
+          <div className={styles.navGroup}>
+            <span className={styles.navGroupLabel}>Docs</span>
+            {DOCS_NAV.map(({ to, label, icon: Icon }) => (
+              <NavLink key={to} to={to} className={navItemClass}>
+                <Icon size={16} />
+                <span>{label}</span>
+              </NavLink>
+            ))}
+          </div>
         </nav>
       </aside>
       <main className={styles.main}>

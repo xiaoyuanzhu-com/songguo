@@ -19,11 +19,17 @@ security:
   - adminKey: []
 tags:
   - name: usage
+    description: Aggregate spend and health — a windowed overview and time-bucketed usage series.
   - name: calls
+    description: The per-request ledger — browse and export calls, and inspect captured request/response traces.
   - name: users
+    description: Gateway users (consumer keys) — create, update, and revoke keys and track lifetime spend.
   - name: providers
+    description: Upstream providers (one credential each) — configure wire endpoints, models and prices, and probe reachability.
   - name: services
+    description: The auto-derived, model-centric view of which providers serve each model.
   - name: config
+    description: Runtime settings, per-model pricing, the provider preset catalogue, and registered wires.
 paths:
   /api/overview:
     get:

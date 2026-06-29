@@ -19,10 +19,12 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api':     { target: 'http://localhost:8080', changeOrigin: true },
-      '/v1':      { target: 'http://localhost:8080', changeOrigin: true },
-      '/x':       { target: 'http://localhost:8080', changeOrigin: true, ws: true },
-      '/healthz': { target: 'http://localhost:8080' },
+      '/api':          { target: 'http://localhost:8080', changeOrigin: true },
+      '/v1':           { target: 'http://localhost:8080', changeOrigin: true },
+      '/x':            { target: 'http://localhost:8080', changeOrigin: true, ws: true },
+      '/healthz':      { target: 'http://localhost:8080' },
+      '/openapi.yaml': { target: 'http://localhost:8080' },
+      '/openapi.json': { target: 'http://localhost:8080' },
     },
   },
 });
