@@ -1,6 +1,9 @@
 # Songguo — dev / build orchestration
 .PHONY: dev backend frontend build install test clean
 
+# Use bash so the cleanup function/loop below behaves consistently.
+SHELL := /bin/bash
+
 # Load .env (if present) and export its variables to all recipes.
 -include .env
 export
@@ -12,10 +15,20 @@ dev:
 	@test -d frontend/node_modules || (cd frontend && npm install)
 	@echo "backend  -> http://localhost:8080"
 	@echo "frontend -> http://localhost:5173   (open this)"
-	@trap 'kill 0' INT TERM EXIT; \
-		( cd backend && SONGGUO_DB=$(CURDIR)/songguo.db SONGGUO_LISTEN=:8080 go run ./cmd/songguo ) & \
-		( cd frontend && npm run dev ) & \
-		wait
+	@stop() { \
+		echo; echo "stopping dev servers..."; \
+		kill 0 2>/dev/null || true; \
+		for sig in TERM TERM KILL; do \
+			pids=$$({ lsof -ti tcp:8080; lsof -ti tcp:5173; } 2>/dev/null | sort -u); \
+			[ -z "$$pids" ] && break; \
+			echo "$$pids" | xargs kill -$$sig 2>/dev/null || true; \
+			sleep 0.4; \
+		done; \
+	}; \
+	trap stop INT TERM EXIT; \
+	( cd backend && exec env SONGGUO_DB=$(CURDIR)/songguo.db SONGGUO_LISTEN=:8080 go run ./cmd/songguo ) & \
+	( cd frontend && exec npm run dev ) & \
+	wait
 
 backend:
 	cd backend && SONGGUO_DB=$(CURDIR)/songguo.db SONGGUO_LISTEN=:8080 go run ./cmd/songguo
