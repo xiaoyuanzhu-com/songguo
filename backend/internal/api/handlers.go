@@ -241,24 +241,9 @@ func (a *api) handleUsageSeries(w http.ResponseWriter, r *http.Request) {
 // else hour. An invalid bucket or a range too large for the bucket returns a
 // *apiError (400).
 func (a *api) usageSeriesData(since, until time.Time, bucketRaw string) (usageSeriesView, error) {
-	var (
-		bucket time.Duration
-		label  string
-	)
-	switch bucketRaw {
-	case "":
-		// Default by range: day if range > 2 days, else hour.
-		if until.Sub(since) > 48*time.Hour {
-			bucket, label = 24*time.Hour, "day"
-		} else {
-			bucket, label = time.Hour, "hour"
-		}
-	case "hour":
-		bucket, label = time.Hour, "hour"
-	case "day":
-		bucket, label = 24*time.Hour, "day"
-	default:
-		return usageSeriesView{}, badRequestErr("bucket must be hour or day")
+	bucket, label, err := resolveBucket(bucketRaw, since, until)
+	if err != nil {
+		return usageSeriesView{}, err
 	}
 
 	points, err := a.store.UsageSeries(since, until, bucket)
@@ -284,6 +269,65 @@ func (a *api) usageSeriesData(since, until time.Time, bucketRaw string) (usageSe
 	}
 
 	return usageSeriesView{Bucket: label, Points: views}, nil
+}
+
+// resolveBucket maps the raw "bucket" query value to a duration and its label.
+// "" auto-selects day for ranges over 2 days, else hour; "hour"/"day" are taken
+// as-is; anything else is a *apiError (400).
+func resolveBucket(bucketRaw string, since, until time.Time) (time.Duration, string, error) {
+	switch bucketRaw {
+	case "":
+		if until.Sub(since) > 48*time.Hour {
+			return 24 * time.Hour, "day", nil
+		}
+		return time.Hour, "hour", nil
+	case "hour":
+		return time.Hour, "hour", nil
+	case "day":
+		return 24 * time.Hour, "day", nil
+	default:
+		return 0, "", badRequestErr("bucket must be hour or day")
+	}
+}
+
+// handleTokensByModel returns per-bucket token totals broken down by model (top
+// N + "Other") alongside total cost, for the Usage tokens-by-model combo chart.
+// Window defaults to the last 7 days; bucket auto-selects like handleUsageSeries.
+func (a *api) handleTokensByModel(w http.ResponseWriter, r *http.Request) {
+	now := a.now().UTC()
+	since := now.AddDate(0, 0, -7)
+	until := now
+	if v, ok := parseUnixTime(r, "since"); ok {
+		since = *v
+	}
+	if v, ok := parseUnixTime(r, "until"); ok {
+		until = *v
+	}
+
+	bucket, label, err := resolveBucket(r.URL.Query().Get("bucket"), since, until)
+	if err != nil {
+		a.writeDataErr(w, "tokens by model", err)
+		return
+	}
+	models, buckets, err := a.store.TokensByModelSeries(since, until, bucket)
+	if err != nil {
+		if errors.Is(err, store.ErrTooManyBuckets) {
+			a.writeDataErr(w, "tokens by model", badRequestErr("requested range is too large for the chosen bucket"))
+			return
+		}
+		a.writeDataErr(w, "tokens by model", err)
+		return
+	}
+
+	points := make([]tokensByModelPoint, 0, len(buckets))
+	for _, b := range buckets {
+		points = append(points, tokensByModelPoint{
+			TS:     b.Bucket.UTC().Format(time.RFC3339),
+			Cost:   b.Cost,
+			Tokens: b.Tokens,
+		})
+	}
+	writeJSON(w, http.StatusOK, tokensByModelView{Bucket: label, Models: models, Points: points})
 }
 
 // handleBreakdown groups the call log by a dimension (model, vendor, user, or

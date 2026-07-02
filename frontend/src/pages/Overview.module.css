@@ -78,6 +78,11 @@
   }
 }
 
+.chartLg {
+  height: 300px;
+  width: 100%;
+}
+
 .chartSm {
   height: 200px;
   width: 100%;

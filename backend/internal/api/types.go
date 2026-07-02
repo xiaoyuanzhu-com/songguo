@@ -166,6 +166,22 @@ type usageSeriesView struct {
 	Points []seriesPoint `json:"points"`
 }
 
+// tokensByModelPoint is one bucket in the GET /api/usage/tokens-by-model
+// response: total cost plus total tokens (input+output) keyed by model.
+type tokensByModelPoint struct {
+	TS     string             `json:"ts"`
+	Cost   float64            `json:"cost"`
+	Tokens map[string]float64 `json:"tokens"`
+}
+
+// tokensByModelView is the GET /api/usage/tokens-by-model response: the ordered
+// model key set (top N + "Other") and per-bucket token/cost points.
+type tokensByModelView struct {
+	Bucket string               `json:"bucket"`
+	Models []string             `json:"models"`
+	Points []tokensByModelPoint `json:"points"`
+}
+
 // breakdownRow is one group's aggregates in the GET /api/usage/breakdown response.
 type breakdownRow struct {
 	Key          string  `json:"key"`

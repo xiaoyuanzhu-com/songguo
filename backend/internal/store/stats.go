@@ -480,6 +480,155 @@ func (s *Store) UsageSeries(since, until time.Time, bucket time.Duration) ([]Ser
 	return out, nil
 }
 
+// tokensByModelTopN caps the number of distinct model series in
+// TokensByModelSeries; models beyond the cap are aggregated under "Other".
+const tokensByModelTopN = 5
+
+// otherModelKey is the synthetic key for tokens from models outside the top N.
+const otherModelKey = "Other"
+
+// TokensByModelBucket is one time bucket of the tokens-by-model series: the
+// bucket start (UTC), the total cost over the bucket, and total tokens
+// (input+output) per model. Only the top models are kept as distinct keys; the
+// remaining models are aggregated under "Other".
+type TokensByModelBucket struct {
+	Bucket time.Time
+	Cost   float64
+	Tokens map[string]float64
+}
+
+// TokensByModelSeries returns, for each fixed time bucket across [since, until),
+// the total cost and total tokens (input+output) broken down by model. The top
+// tokensByModelTopN models by total tokens over the whole range are kept as
+// distinct keys; every other model is summed into "Other". Every bucket in the
+// range is present (gaps filled with zeroes), and every bucket's Tokens map
+// carries the same key set. The returned slice is that key set, ordered
+// descending by total tokens with "Other" (when present) last. Bucket
+// timestamps are UTC. Empty model names are reported as "unknown".
+func (s *Store) TokensByModelSeries(since, until time.Time, bucket time.Duration) ([]string, []TokensByModelBucket, error) {
+	if bucket <= 0 {
+		return nil, nil, fmt.Errorf("store: tokens by model series: bucket must be positive")
+	}
+	bucketMs := bucket.Milliseconds()
+	if bucketMs <= 0 {
+		return nil, nil, fmt.Errorf("store: tokens by model series: bucket too small")
+	}
+
+	sinceMs := since.UnixMilli()
+	untilMs := until.UnixMilli()
+	startMs := (sinceMs / bucketMs) * bucketMs
+	if untilMs <= startMs {
+		return []string{}, []TokensByModelBucket{}, nil
+	}
+	count := (untilMs-startMs-1)/bucketMs + 1
+	if count > maxSeriesBuckets {
+		return nil, nil, fmt.Errorf("%w: %d exceeds limit of %d", ErrTooManyBuckets, count, maxSeriesBuckets)
+	}
+
+	rows, err := s.db.Query(
+		`SELECT (ts / ?) * ? AS bucket_start,
+		        model,
+		        COALESCE(SUM(input_tokens + output_tokens), 0),
+		        COALESCE(SUM(cost), 0)
+		   FROM calls
+		  WHERE ts >= ? AND ts < ?
+		  GROUP BY bucket_start, model`,
+		bucketMs, bucketMs, sinceMs, untilMs,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("store: tokens by model series: %w", err)
+	}
+	defer rows.Close()
+
+	type cell struct {
+		bucket int64
+		model  string
+		tokens float64
+	}
+	var cells []cell
+	modelTotals := make(map[string]float64)
+	bucketCost := make(map[int64]float64)
+	for rows.Next() {
+		var (
+			b      int64
+			model  string
+			tokens float64
+			cost   float64
+		)
+		if err := rows.Scan(&b, &model, &tokens, &cost); err != nil {
+			return nil, nil, fmt.Errorf("store: scan tokens by model series: %w", err)
+		}
+		if model == "" {
+			model = "unknown"
+		}
+		cells = append(cells, cell{bucket: b, model: model, tokens: tokens})
+		modelTotals[model] += tokens
+		bucketCost[b] += cost
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("store: tokens by model series: %w", err)
+	}
+
+	// Rank models by total tokens (desc), tie-break by name (asc); keep top N.
+	ranked := make([]string, 0, len(modelTotals))
+	for m := range modelTotals {
+		ranked = append(ranked, m)
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		if modelTotals[ranked[i]] != modelTotals[ranked[j]] {
+			return modelTotals[ranked[i]] > modelTotals[ranked[j]]
+		}
+		return ranked[i] < ranked[j]
+	})
+
+	top := make(map[string]bool)
+	models := make([]string, 0, tokensByModelTopN+1)
+	for _, m := range ranked {
+		if len(models) >= tokensByModelTopN {
+			break
+		}
+		top[m] = true
+		models = append(models, m)
+	}
+	hasOther := len(ranked) > len(models)
+
+	// Fold each cell into its bucket, remapping non-top models to "Other".
+	perBucket := make(map[int64]map[string]float64)
+	for _, c := range cells {
+		key := c.model
+		if !top[key] {
+			key = otherModelKey
+		}
+		m := perBucket[c.bucket]
+		if m == nil {
+			m = make(map[string]float64)
+			perBucket[c.bucket] = m
+		}
+		m[key] += c.tokens
+	}
+	if hasOther {
+		models = append(models, otherModelKey)
+	}
+
+	out := make([]TokensByModelBucket, 0, count)
+	for i := int64(0); i < count; i++ {
+		bs := startMs + i*bucketMs
+		tokens := make(map[string]float64, len(models))
+		for _, m := range models {
+			tokens[m] = 0
+		}
+		for m, v := range perBucket[bs] {
+			tokens[m] += v
+		}
+		out = append(out, TokensByModelBucket{
+			Bucket: time.UnixMilli(bs).UTC(),
+			Cost:   bucketCost[bs],
+			Tokens: tokens,
+		})
+	}
+	return models, out, nil
+}
+
 // isErrorStatus reports whether a recorded upstream status counts as an error:
 // 0 (transport failure / no response) or any 4xx/5xx.
 func isErrorStatus(status int) bool {

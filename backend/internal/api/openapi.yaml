@@ -66,6 +66,26 @@ paths:
               schema: { $ref: "#/components/schemas/UsageSeries" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+  /api/usage/tokens-by-model:
+    get:
+      tags: [usage]
+      summary: Per-bucket tokens broken down by model, plus total cost
+      operationId: getUsageTokensByModel
+      parameters:
+        - $ref: "#/components/parameters/Since"
+        - $ref: "#/components/parameters/Until"
+        - name: bucket
+          in: query
+          schema: { type: string, enum: [hour, day] }
+          description: Bucket size; omit to auto-select (day for ranges over 2 days, else hour).
+      responses:
+        "200":
+          description: Tokens-by-model series
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokensByModelSeries" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
   /api/usage/breakdown:
     get:
       tags: [usage]
@@ -546,6 +566,21 @@ components:
       properties:
         bucket: { type: string }
         points: { type: array, items: { $ref: "#/components/schemas/SeriesPoint" } }
+    TokensByModelPoint:
+      type: object
+      properties:
+        ts: { type: string, format: date-time }
+        cost: { type: number }
+        tokens:
+          type: object
+          additionalProperties: { type: number }
+          description: Total tokens (input+output) keyed by model (top N + "Other").
+    TokensByModelSeries:
+      type: object
+      properties:
+        bucket: { type: string }
+        models: { type: array, items: { type: string } }
+        points: { type: array, items: { $ref: "#/components/schemas/TokensByModelPoint" } }
     BreakdownRow:
       type: object
       properties:

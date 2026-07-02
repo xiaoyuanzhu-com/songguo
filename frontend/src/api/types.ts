@@ -53,6 +53,18 @@ export interface UsageSeries {
   points: SeriesPoint[];
 }
 
+export interface TokensByModelPoint {
+  ts: string;
+  cost: number;
+  tokens: Record<string, number>;
+}
+
+export interface TokensByModelSeries {
+  bucket: Bucket;
+  models: string[];
+  points: TokensByModelPoint[];
+}
+
 export type BreakdownDimension = 'model' | 'vendor' | 'user' | 'modality';
 
 export interface BreakdownRow {

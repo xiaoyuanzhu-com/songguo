@@ -6,6 +6,7 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  ComposedChart,
   Line,
   LineChart,
   Pie,
@@ -13,7 +14,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { Activity, Coins, ShieldCheck, Users } from 'lucide-react';
+import { Activity, Coins, DollarSign, ShieldCheck, Users } from 'lucide-react';
 import { api } from '../api/client';
 import type { Bucket, BreakdownRow } from '../api/types';
 import { ErrorBanner } from '../components/ErrorBanner';
@@ -21,6 +22,8 @@ import { Page } from '../components/Layout';
 import { Skeleton } from '../components/Skeleton';
 import {
   ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
   ChartTooltip,
   ChartTooltipContent,
   type ChartConfig,
@@ -68,6 +71,11 @@ export function OverviewPage() {
     [since, until, range.bucket],
     opts,
   );
+  const tokenSeries = useFetch(
+    () => api.tokensByModel(since, until, range.bucket),
+    [since, until, range.bucket],
+    opts,
+  );
   const byModel = useFetch(() => api.breakdown('model', since, until), [since, until], opts);
   const byVendor = useFetch(() => api.breakdown('vendor', since, until), [since, until], opts);
   const byUser = useFetch(() => api.breakdown('user', since, until), [since, until], opts);
@@ -93,6 +101,30 @@ export function OverviewPage() {
     }));
   }, [series.data, range.bucket]);
   const seriesEmpty = points.length === 0;
+
+  // Tokens-by-model combo chart: one row per bucket with a numeric column per
+  // model plus total cost. Bars stack the model columns (left axis); cost is a
+  // line (right axis). Models come pre-ranked from the backend (top N + "Other").
+  const { tokenModels, tokenPoints } = useMemo(() => {
+    const data = tokenSeries.data;
+    const modelKeys = data?.models ?? [];
+    const bucket = data?.bucket ?? range.bucket;
+    const rows = (data?.points ?? []).map((p) => {
+      const row: Record<string, number | string> = { label: bucketLabel(p.ts, bucket), cost: p.cost };
+      for (const m of modelKeys) row[m] = p.tokens[m] ?? 0;
+      return row;
+    });
+    return { tokenModels: modelKeys, tokenPoints: rows };
+  }, [tokenSeries.data, range.bucket]);
+  const tokenConfig = useMemo<ChartConfig>(() => {
+    const c: ChartConfig = { cost: { label: 'Cost' } };
+    tokenModels.forEach((m) => {
+      c[m] = { label: m };
+    });
+    return c;
+  }, [tokenModels]);
+  const modelColor = (m: string, i: number) =>
+    m === 'Other' ? 'var(--text-muted)' : PALETTE[i % PALETTE.length];
 
   const models = (byModel.data?.rows ?? []).slice(0, TOP_N);
   const vendors = (byVendor.data?.rows ?? []).slice(0, TOP_N);
@@ -158,6 +190,13 @@ export function OverviewPage() {
           sub={ov ? `${int(ov.tokens.input)} in · ${int(ov.tokens.output)} out` : undefined}
         />
         <Kpi
+          icon={<DollarSign size={14} />}
+          label={`Spend (${range.label})`}
+          loading={overview.initialLoading}
+          value={ov ? money(ov.total_spend) : '—'}
+          sub={ov ? `${money(ov.daily_burn)}/day` : undefined}
+        />
+        <Kpi
           icon={<Users size={14} />}
           label="Active users"
           loading={overview.initialLoading}
@@ -174,9 +213,57 @@ export function OverviewPage() {
         />
       </div>
 
-      {/* Traffic */}
-      <SectionTitle name="Traffic" />
-      <div className={styles.grid3}>
+      {/* Usage */}
+      <SectionTitle name="Usage" hint="Requests and spend" />
+      <div className={`card ${styles.panel}`} style={{ marginBottom: 12 }}>
+        <div className={styles.panelHead}>
+          <span className={styles.panelTitle}>Tokens by model & cost</span>
+        </div>
+        <Frame r={tokenSeries} height={styles.chartLg} empty={tokenModels.length === 0}>
+          <ChartContainer config={tokenConfig} className={CHART_CLS}>
+            <ComposedChart data={tokenPoints} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+              <CartesianGrid vertical={false} />
+              <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
+              <YAxis
+                yAxisId="tokens"
+                tickLine={false}
+                axisLine={false}
+                width={48}
+                tickFormatter={(v: number) => compact(v)}
+              />
+              <YAxis
+                yAxisId="cost"
+                orientation="right"
+                tickLine={false}
+                axisLine={false}
+                width={52}
+                tickFormatter={(v: number) => money(v)}
+              />
+              <ChartTooltip content={<ChartTooltipContent />} />
+              <ChartLegend content={<ChartLegendContent />} />
+              {tokenModels.map((m, i) => (
+                <Bar
+                  key={m}
+                  yAxisId="tokens"
+                  dataKey={m}
+                  stackId="tok"
+                  fill={modelColor(m, i)}
+                  radius={i === tokenModels.length - 1 ? [3, 3, 0, 0] : undefined}
+                />
+              ))}
+              <Line
+                yAxisId="cost"
+                dataKey="cost"
+                type="monotone"
+                stroke="var(--text)"
+                strokeWidth={2}
+                dot={false}
+              />
+            </ComposedChart>
+          </ChartContainer>
+        </Frame>
+      </div>
+      <div className={styles.grid2}>
         <Panel title="Requests over time">
           <Frame r={series} height={styles.chartSm} empty={seriesEmpty}>
             <ChartContainer config={{ requests: { label: 'Requests', color: 'var(--chart-1)' } }} className={CHART_CLS}>
@@ -190,6 +277,21 @@ export function OverviewPage() {
             </ChartContainer>
           </Frame>
         </Panel>
+        <Panel title="Spend over time">
+          <Frame r={series} height={styles.chartSm} empty={seriesEmpty}>
+            <ChartContainer config={{ cost: { label: 'Spend', color: 'var(--chart-1)' } }} className={CHART_CLS}>
+              <AreaChart data={points} margin={{ top: 6, right: 8, left: -4, bottom: 0 }}>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
+                <YAxis tickLine={false} axisLine={false} width={52} tickFormatter={(v: number) => money(v)} />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Area dataKey="cost" type="monotone" stroke="var(--color-cost)" fill="var(--color-cost)" fillOpacity={0.15} strokeWidth={2} />
+              </AreaChart>
+            </ChartContainer>
+          </Frame>
+        </Panel>
+      </div>
+      <div className={styles.grid3}>
         <Panel title="Top models">
           <Frame r={byModel} height={styles.chartSm} empty={models.length === 0}>
             <CategoryBars rows={models} dataKey="requests" label="Requests" color="var(--chart-1)" fmt={int} />
@@ -206,6 +308,44 @@ export function OverviewPage() {
                   ))}
                 </Pie>
               </PieChart>
+            </ChartContainer>
+          </Frame>
+        </Panel>
+        <Panel title="Spend by model">
+          <Frame r={byModel} height={styles.chartSm} empty={models.length === 0}>
+            <CategoryBars rows={models} dataKey="cost" label="Spend" color="var(--chart-1)" fmt={money} />
+          </Frame>
+        </Panel>
+      </div>
+
+      {/* Performance */}
+      <SectionTitle name="Performance" hint="End-to-end latency" />
+      <div className={styles.grid2}>
+        <Panel title="Latency percentiles">
+          {overview.initialLoading ? (
+            <Skeleton height={64} />
+          ) : (
+            <div className={styles.latencyGroup} style={{ marginTop: 4 }}>
+              {(['p50', 'p95', 'p99'] as const).map((p) => (
+                <div key={p} className={styles.latencyStat}>
+                  <span className={styles.latencyLabel}>{p}</span>
+                  <span className={styles.latencyValue}>{ov ? ms(ov.latency_ms[p]) : '—'}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className={styles.deferred}>TTFT &amp; tokens/sec coming once streaming is instrumented.</div>
+        </Panel>
+        <Panel title="Avg latency over time">
+          <Frame r={series} height={styles.chartXs} empty={seriesEmpty}>
+            <ChartContainer config={{ avg_latency_ms: { label: 'Avg latency', color: 'var(--chart-4)' } }} className={CHART_CLS}>
+              <LineChart data={points} margin={{ top: 6, right: 8, left: -8, bottom: 0 }}>
+                <CartesianGrid vertical={false} />
+                <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
+                <YAxis tickLine={false} axisLine={false} width={48} tickFormatter={(v: number) => `${Math.round(v)}`} />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Line dataKey="avg_latency_ms" type="monotone" stroke="var(--color-avg_latency_ms)" strokeWidth={2} dot={false} />
+              </LineChart>
             </ChartContainer>
           </Frame>
         </Panel>
@@ -268,39 +408,6 @@ export function OverviewPage() {
         </Panel>
       </div>
 
-      {/* Performance */}
-      <SectionTitle name="Performance" hint="End-to-end latency" />
-      <div className={styles.grid2}>
-        <Panel title="Latency percentiles">
-          {overview.initialLoading ? (
-            <Skeleton height={64} />
-          ) : (
-            <div className={styles.latencyGroup} style={{ marginTop: 4 }}>
-              {(['p50', 'p95', 'p99'] as const).map((p) => (
-                <div key={p} className={styles.latencyStat}>
-                  <span className={styles.latencyLabel}>{p}</span>
-                  <span className={styles.latencyValue}>{ov ? ms(ov.latency_ms[p]) : '—'}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          <div className={styles.deferred}>TTFT &amp; tokens/sec coming once streaming is instrumented.</div>
-        </Panel>
-        <Panel title="Avg latency over time">
-          <Frame r={series} height={styles.chartXs} empty={seriesEmpty}>
-            <ChartContainer config={{ avg_latency_ms: { label: 'Avg latency', color: 'var(--chart-4)' } }} className={CHART_CLS}>
-              <LineChart data={points} margin={{ top: 6, right: 8, left: -8, bottom: 0 }}>
-                <CartesianGrid vertical={false} />
-                <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
-                <YAxis tickLine={false} axisLine={false} width={48} tickFormatter={(v: number) => `${Math.round(v)}`} />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Line dataKey="avg_latency_ms" type="monotone" stroke="var(--color-avg_latency_ms)" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ChartContainer>
-          </Frame>
-        </Panel>
-      </div>
-
       {/* Reliability */}
       <SectionTitle name="Reliability" />
       <div className={styles.grid3}>
@@ -342,29 +449,6 @@ export function OverviewPage() {
               color="var(--chart-5)"
               fmt={(v) => `${v.toFixed(1)}%`}
             />
-          </Frame>
-        </Panel>
-      </div>
-
-      {/* Cost */}
-      <SectionTitle name="Cost" />
-      <div className={styles.grid2}>
-        <Panel title="Spend over time">
-          <Frame r={series} height={styles.chartXs} empty={seriesEmpty}>
-            <ChartContainer config={{ cost: { label: 'Spend', color: 'var(--chart-1)' } }} className={CHART_CLS}>
-              <AreaChart data={points} margin={{ top: 6, right: 8, left: -4, bottom: 0 }}>
-                <CartesianGrid vertical={false} />
-                <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={28} />
-                <YAxis tickLine={false} axisLine={false} width={52} tickFormatter={(v: number) => money(v)} />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Area dataKey="cost" type="monotone" stroke="var(--color-cost)" fill="var(--color-cost)" fillOpacity={0.15} strokeWidth={2} />
-              </AreaChart>
-            </ChartContainer>
-          </Frame>
-        </Panel>
-        <Panel title="Spend by model">
-          <Frame r={byModel} height={styles.chartXs} empty={models.length === 0}>
-            <CategoryBars rows={models} dataKey="cost" label="Spend" color="var(--chart-1)" fmt={money} />
           </Frame>
         </Panel>
       </div>
